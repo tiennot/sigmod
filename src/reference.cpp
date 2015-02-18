@@ -206,6 +206,7 @@ static void processValidationQueries(const ValidationQueries& v)
                break;
             }
          }
+         if(conflict) break;
       }
       reader+=sizeof(Query)+(sizeof(Query::Column)*q.columnCount);
    }
