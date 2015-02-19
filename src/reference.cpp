@@ -253,7 +253,7 @@ int main()
          case MessageHead::Flush: processFlush(readBody<Flush>(cin,message,head.messageLen)); break;
          case MessageHead::Forget: processForget(readBody<Forget>(cin,message,head.messageLen)); break;
          case MessageHead::DefineSchema: processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen)); break;
-         case MessageHead::Done: clog << avg << endl; return 0;
+         case MessageHead::Done: return 0;
         default: cerr << "malformed message" << endl; abort(); // crude error handling, should never happen
       }
    }
