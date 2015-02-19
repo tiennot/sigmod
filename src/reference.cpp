@@ -146,26 +146,27 @@ static void processTransaction(const Transaction& t)
 
    // Delete all indicated tuples
    for (uint32_t index=0;index!=t.deleteCount;++index) {
-      auto& o=*reinterpret_cast<const TransactionOperationDelete*>(reader);
-      for (const uint64_t* key=o.keys,*keyLimit=key+o.rowCount;key!=keyLimit;++key) {
-         if (relations[o.relationId].count(*key)) {
-            operations.push_back(pair<uint32_t,vector<uint64_t>>(o.relationId,move(relations[o.relationId][*key])));
-            relations[o.relationId].erase(*key);
+       const TransactionOperationDelete* o= (const TransactionOperationDelete*) reader;
+      for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
+         //If the tuple key exists in the relation
+         if (relations[o->relationId].count(*key)) {
+            operations.push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,move(relations[o->relationId][*key])));
+            relations[o->relationId].erase(*key);
          }
       }
-      reader+=sizeof(TransactionOperationDelete)+(sizeof(uint64_t)*o.rowCount);
+      reader+=sizeof(TransactionOperationDelete)+(sizeof(uint64_t)*o->rowCount);
    }
 
    // Insert new tuples
    for (uint32_t index=0;index!=t.insertCount;++index) {
-      auto& o=*reinterpret_cast<const TransactionOperationInsert*>(reader);
-      for (const uint64_t* values=o.values,*valuesLimit=values+(o.rowCount*schema[o.relationId]);values!=valuesLimit;values+=schema[o.relationId]) {
+      const TransactionOperationInsert* o= (const TransactionOperationInsert*) reader;
+      for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
          vector<uint64_t> tuple;
-         tuple.insert(tuple.begin(),values,values+schema[o.relationId]);
-         operations.push_back(pair<uint32_t,vector<uint64_t>>(o.relationId,tuple));
-         relations[o.relationId][values[0]]=move(tuple);
+         tuple.insert(tuple.begin(),values,values+schema[o->relationId]);
+         operations.push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,tuple));
+         relations[o->relationId][values[0]]=move(tuple);
       }
-      reader+=sizeof(TransactionOperationInsert)+(sizeof(uint64_t)*o.rowCount*schema[o.relationId]);
+      reader+=sizeof(TransactionOperationInsert)+(sizeof(uint64_t)*o->rowCount*schema[o->relationId]);
    }
 
    transactionHistory[t.transactionId]=move(operations);
@@ -245,16 +246,15 @@ int main()
       MessageHead head;
       cin.read(reinterpret_cast<char*>(&head),sizeof(head));
       if (!cin) { cerr << "read error" << endl; abort(); } // crude error handling, should never happen
-
       // And interpret it
       switch (head.type) {
-         case MessageHead::Done: return 0;
-         case MessageHead::DefineSchema: processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen)); break;
-         case MessageHead::Transaction: processTransaction(readBody<Transaction>(cin,message,head.messageLen)); break;
          case MessageHead::ValidationQueries: processValidationQueries(readBody<ValidationQueries>(cin,message,head.messageLen)); break;
+         case MessageHead::Transaction: processTransaction(readBody<Transaction>(cin,message,head.messageLen)); break;
          case MessageHead::Flush: processFlush(readBody<Flush>(cin,message,head.messageLen)); break;
          case MessageHead::Forget: processForget(readBody<Forget>(cin,message,head.messageLen)); break;
-         default: cerr << "malformed message" << endl; abort(); // crude error handling, should never happen
+         case MessageHead::DefineSchema: processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen)); break;
+         case MessageHead::Done: clog << avg << endl; return 0;
+        default: cerr << "malformed message" << endl; abort(); // crude error handling, should never happen
       }
    }
 }
