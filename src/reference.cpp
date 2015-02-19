@@ -131,6 +131,9 @@ static vector<map<uint32_t,vector<uint64_t>>> relations;
 static map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>> transactionHistory;
 static map<uint64_t,bool> queryResults;
 //---------------------------------------------------------------------------
+//Store for each relation id the transactions that affected the relation in transactionHistory
+static map<uint32_t, vector<uint64_t>> relationEditor;
+//---------------------------------------------------------------------------
 static void processDefineSchema(const DefineSchema& d)
 {
    schema.clear();
@@ -144,13 +147,18 @@ static void processTransaction(const Transaction& t)
    vector<pair<uint32_t,vector<uint64_t>>> operations;
    const char* reader=t.operations;
 
+   //Keeps track of the relations we updated
+   map<uint32_t, bool> relationsEdited;
+
    // Delete all indicated tuples
    for (uint32_t index=0;index!=t.deleteCount;++index) {
        const TransactionOperationDelete* o= (const TransactionOperationDelete*) reader;
-      for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
+       if(!relationsEdited.count(o->relationId)) relationsEdited[o->relationId] = true;
+       //Loops through the tuples to delete
+       for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
          //If the tuple key exists in the relation
          if (relations[o->relationId].count(*key)) {
-            operations.push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,move(relations[o->relationId][*key])));
+             operations.push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,move(relations[o->relationId][*key])));
             relations[o->relationId].erase(*key);
          }
       }
@@ -160,6 +168,8 @@ static void processTransaction(const Transaction& t)
    // Insert new tuples
    for (uint32_t index=0;index!=t.insertCount;++index) {
       const TransactionOperationInsert* o= (const TransactionOperationInsert*) reader;
+      if(!relationsEdited.count(o->relationId)) relationsEdited[o->relationId] = true;
+      //Loops through the tuples to insert
       for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
          vector<uint64_t> tuple;
          tuple.insert(tuple.begin(),values,values+schema[o->relationId]);
@@ -169,19 +179,27 @@ static void processTransaction(const Transaction& t)
       reader+=sizeof(TransactionOperationInsert)+(sizeof(uint64_t)*o->rowCount*schema[o->relationId]);
    }
 
+   //Register transaction as editor
+   for(auto iter : relationsEdited){
+       relationEditor[iter.first].push_back(t.transactionId);
+   }
+   //Register transaction
    transactionHistory[t.transactionId]=move(operations);
 }
 //---------------------------------------------------------------------------
 static void processValidationQueries(const ValidationQueries& v)
 {
-   auto from=transactionHistory.lower_bound(v.from);
-   auto to=transactionHistory.upper_bound(v.to);
    bool conflict=false;
    const char* reader=v.queries;
    for (unsigned index=0;index!=v.queryCount;++index) {
       auto& q=*reinterpret_cast<const Query*>(reader);
-      for (auto iter=from;iter!=to;++iter) {
-         for (auto& op:(*iter).second) {
+
+      //Loops through the transactions
+      for (auto iter: relationEditor[q.relationId]) {
+          //Skips if out of bounds
+          if(v.to<iter || v.from>iter) continue;
+
+          for (auto& op: transactionHistory[iter]) {
             // Check if the relation is the same
             if (op.first!=q.relationId)
                continue;
@@ -209,6 +227,7 @@ static void processValidationQueries(const ValidationQueries& v)
          }
          if(conflict) break;
       }
+
       reader+=sizeof(Query)+(sizeof(Query::Column)*q.columnCount);
    }
 
@@ -227,8 +246,16 @@ static void processFlush(const Flush& f)
 //---------------------------------------------------------------------------
 static void processForget(const Forget& f)
 {
+   //Erase from transaction history
    while ((!transactionHistory.empty())&&((*transactionHistory.begin()).first<=f.transactionId))
       transactionHistory.erase(transactionHistory.begin());
+   //Erase from relation editors
+   for(auto iter : relationEditor){
+      vector<uint64_t> editors = iter.second;
+      while(!editors.empty() && *(editors.begin())<= f.transactionId){
+          editors.erase(editors.begin());
+      }
+   }
 }
 //---------------------------------------------------------------------------
 // Read the message body and cast it to the desired type
