@@ -30,6 +30,7 @@
 #include <iostream>
 #include <map>
 #include <vector>
+#include <set>
 #include <cassert>
 #include <cstdint>
 using namespace std;
@@ -159,12 +160,12 @@ static void processTransaction(const Transaction& t)
     const char* reader=t.operations;
 
     //Keeps track of the relations we updated
-    map<uint32_t, bool> relationsEdited;
+    set<uint32_t> relationsEdited;
 
     // Delete all indicated tuples
     for (uint32_t index=0;index!=t.deleteCount;++index) {
         const TransactionOperationDelete* o= (const TransactionOperationDelete*) reader;
-        if(!relationsEdited.count(o->relationId)) relationsEdited[o->relationId] = true;
+        relationsEdited.insert(o->relationId);
         //Loops through the tuples to delete
         for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
             //If the tuple key exists in the relation
@@ -179,7 +180,7 @@ static void processTransaction(const Transaction& t)
     // Insert new tuples
     for (uint32_t index=0;index!=t.insertCount;++index) {
         const TransactionOperationInsert* o= (const TransactionOperationInsert*) reader;
-        if(!relationsEdited.count(o->relationId)) relationsEdited[o->relationId] = true;
+        relationsEdited.insert(o->relationId);
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
             vector<uint64_t> tuple;
@@ -192,7 +193,7 @@ static void processTransaction(const Transaction& t)
 
     //Register transaction as editor
     for(auto iter : relationsEdited){
-        relationEditor[iter.first].push_back(t.transactionId);
+        relationEditor[iter].push_back(t.transactionId);
     }
     //Register transaction
     transactionHistory[t.transactionId]=move(operations);
