@@ -33,6 +33,7 @@
 #include <set>
 #include <cassert>
 #include <cstdint>
+#include <pthread.h>
 using namespace std;
 //---------------------------------------------------------------------------
 
@@ -143,6 +144,14 @@ static map<uint64_t,bool> queryResults;
 //Store for each relationId the transactions that affected the relation
 static map<uint32_t, vector<uint64_t>> relationEditor;
 
+//Lists of (validationId, query) to be processed by the second thread + mutex
+static vector<pair<uint64_t, Query>> queriesSecondThread;
+pthread_mutex_t mutexQueries = PTHREAD_MUTEX_INITIALIZER;
+
+//Condition variable before flush
+pthread_cond_t  readyToFlush   = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mutexFlush = PTHREAD_MUTEX_INITIALIZER;
+
 //---------------------------------------------------------------------------
 static void processDefineSchema(const DefineSchema& d)
 {
@@ -206,6 +215,11 @@ static void processValidationQueries(const ValidationQueries& v)
     for (unsigned index=0;index!=v.queryCount;++index) {
         auto& q=*reinterpret_cast<const Query*>(reader);
 
+        //Adds the query to the query list for second thread
+        pthread_mutex_lock( &mutexQueries );
+        queriesSecondThread.push_back(pair<uint64_t, Query>(v.validationId,q));
+        pthread_mutex_unlock( &mutexQueries );
+
         auto vector = relationEditor[q.relationId];
         auto from = lower_bound(vector.begin(), vector.end(), v.from);
         auto to = lower_bound(vector.begin(), vector.end(), v.to+1);
@@ -247,6 +261,12 @@ static void processValidationQueries(const ValidationQueries& v)
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
 {
+    //The main thread waits for the second one to finish processing all the queries
+    pthread_mutex_lock( &mutexFlush );
+    pthread_cond_wait( &readyToFlush, &mutexFlush );
+    pthread_mutex_unlock( &mutexFlush );
+
+    //Outputs all the queryResults available
     while ((!queryResults.empty())&&((*queryResults.begin()).first<=f.validationId)) {
         char c='0'+(*queryResults.begin()).second;
         cout.write(&c,1);
@@ -276,8 +296,52 @@ template<typename Type> static const Type& readBody(istream& in,vector<char>& bu
     return *reinterpret_cast<const Type*>(buffer.data());
 }
 //---------------------------------------------------------------------------
+static unsigned int nbQueryHandled = 0;
+static bool noMoreQuery = false;
+//Second thread function
+void *secondThread(void *ptr){
+    ptr = ptr;
+    while(true){
+        pthread_mutex_lock( &mutexQueries );
+        if(queriesSecondThread.size()){
+            //Gets the query from the list
+            /*
+            uint64_t queryId = queriesSecondThread[0].first;
+            Query q = queriesSecondThread[0].second;
+            clog << queryId << " (" << q.relationId << ")" << endl;
+            */
+            pthread_mutex_unlock( &mutexQueries );
+
+            //Handles the query
+            ++nbQueryHandled;
+
+            //Erase the query from the list
+            pthread_mutex_lock( &mutexQueries );
+            queriesSecondThread.erase(queriesSecondThread.begin());
+        }else{
+            //Uses condition variable to tell the main thread size==0
+            pthread_mutex_lock( &mutexFlush );
+            pthread_cond_signal( &readyToFlush );
+            pthread_mutex_unlock( &mutexFlush );
+
+            //If the program is done
+            if(noMoreQuery) break;
+        }
+        pthread_mutex_unlock( &mutexQueries );
+    }
+    return NULL;
+}
+//---------------------------------------------------------------------------
 int main()
 {
+    //Initializes the second thread
+    pthread_t second_thread;
+    int threadId = 1;
+    if(pthread_create( &second_thread, NULL, secondThread, (void*) &threadId)) {
+        clog << "Error while creating the thread" << endl;
+        exit(EXIT_FAILURE);
+    }
+
     vector<char> message;
     while (true) {
         // Retrieve the message
@@ -307,6 +371,12 @@ int main()
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
+                //Tells the second thread it's over
+                noMoreQuery = true;
+                //Wait for the second thread to end
+                pthread_join(second_thread, NULL);
+                clog << "Nb query handled: " << nbQueryHandled << endl;
+                clog << "Size of the query list: " << queriesSecondThread.size() << endl;
                 return 0;
             default:
                 // crude error handling, should never happen
