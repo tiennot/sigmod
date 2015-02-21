@@ -206,12 +206,12 @@ static void processValidationQueries(const ValidationQueries& v)
     for (unsigned index=0;index!=v.queryCount;++index) {
         auto& q=*reinterpret_cast<const Query*>(reader);
 
+        auto vector = relationEditor[q.relationId];
+        auto from = lower_bound(vector.begin(), vector.end(), v.from);
+        auto to = lower_bound(vector.begin(), vector.end(), v.to+1);
         //Loops through the transactions
-        for (auto iter: relationEditor[q.relationId]) {
-            //Skips if out of bounds
-            if(v.to<iter || v.from>iter) continue;
-
-            for (auto& op: transactionHistory[iter]) {
+        for (auto iter=from; iter!=to; ++iter) {
+            for (auto& op: transactionHistory[(*iter)]) {
                 // Check if the relation is the same
                 if (op.first!=q.relationId)
                 continue;
