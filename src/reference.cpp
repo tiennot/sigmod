@@ -157,8 +157,8 @@ pthread_mutex_t mutexRelationEditor1 = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutexRelationEditor2 = PTHREAD_MUTEX_INITIALIZER;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each thread + mutexes
-static list<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess1;
-static list<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess2;
+static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess1;
+static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess2;
 pthread_mutex_t mutexQueriesToProcess1 = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutexQueriesToProcess2 = PTHREAD_MUTEX_INITIALIZER;
 
@@ -168,18 +168,27 @@ pthread_cond_t  readyToFlush2   = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t mutexReadyToFlush1 = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutexReadyToFlush2 = PTHREAD_MUTEX_INITIALIZER;
 
+//Booleans to tells if the threads are waiting + mutexes
+static bool waiting1 = false;
+static bool waiting2 = false;
+pthread_mutex_t mutexWaiting1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutexWaiting2 = PTHREAD_MUTEX_INITIALIZER;
+
+//Condition variable to tell threads their list is not empty + mutexes
+pthread_cond_t  notEmpty1   = PTHREAD_COND_INITIALIZER;
+pthread_cond_t  notEmpty2   = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mutexNotEmpty1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutexNotEmpty2 = PTHREAD_MUTEX_INITIALIZER;
+
 //Set to true at end of execution + mutexes
 static bool noMoreQuery1 = false;
 static bool noMoreQuery2 = false;
 pthread_mutex_t mutexNoMoreQuery1 = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutexNoMoreQuery2 = PTHREAD_MUTEX_INITIALIZER;
 
-pthread_mutex_t bigMutex1 = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t bigMutex2 = PTHREAD_MUTEX_INITIALIZER;
-
 //---------------------------------------------------------------------------
 //Function that tells which thread handle a given relation
-static int assignedThread(uint32_t relationId){
+inline static int assignedThread(uint32_t relationId){
     /*
      * 0 is the main thread which performs insertions, deletion, flush, etc.
      * 1 performs half the validations
@@ -295,34 +304,59 @@ static void processValidationQueries(const ValidationQueries& v)
             pthread_mutex_lock( &mutexQueriesToProcess1 );
             queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
             pthread_mutex_unlock( &mutexQueriesToProcess1 );
+            //Tells thread1
+            pthread_mutex_lock( &mutexWaiting1 );
+            if(waiting1){
+                pthread_mutex_lock( &mutexNotEmpty1 );
+                pthread_cond_signal( &notEmpty1 );
+                pthread_mutex_unlock( &mutexNotEmpty1 );
+            }
+            pthread_mutex_unlock( &mutexWaiting1 );
         }else{
             pthread_mutex_lock( &mutexQueriesToProcess2 );
             queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
             pthread_mutex_unlock( &mutexQueriesToProcess2 );
+            //Tells thread2
+            pthread_mutex_lock( &mutexWaiting2 );
+            if(waiting2){
+                pthread_mutex_lock( &mutexNotEmpty2 );
+                pthread_cond_signal( &notEmpty2 );
+                pthread_mutex_unlock( &mutexNotEmpty2 );
+            }
+            pthread_mutex_unlock( &mutexWaiting2 );
         }
-
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*columnCount);
     }
 }
 //---------------------------------------------------------------------------
-static unsigned int waited = 0;
 static void processFlush(const Flush& f)
 {
-    auto start = std::chrono::system_clock::now();
-
-    //The main thread waits for thread1
+    //If thread1 is waiting we tell to proceed
+    pthread_mutex_lock( &mutexWaiting1 );
+    if(waiting1){
+        pthread_mutex_lock( &mutexNotEmpty1 );
+        pthread_cond_signal( &notEmpty1 );
+        pthread_mutex_unlock( &mutexNotEmpty1 );
+    }
     pthread_mutex_lock( &mutexReadyToFlush1 );
+    pthread_mutex_unlock( &mutexWaiting1 );
+    //The main thread waits for thread1
     pthread_cond_wait( &readyToFlush1, &mutexReadyToFlush1 );
     pthread_mutex_unlock( &mutexReadyToFlush1 );
 
-    //The main thread waits for thread2
+    //If thread2 is waiting we tell to proceed
+    pthread_mutex_lock( &mutexWaiting2 );
+    if(waiting2){
+        pthread_mutex_lock( &mutexNotEmpty2 );
+        pthread_cond_signal( &notEmpty2 );
+        pthread_mutex_unlock( &mutexNotEmpty2 );
+    }
     pthread_mutex_lock( &mutexReadyToFlush2 );
+    pthread_mutex_unlock( &mutexWaiting2 );
+    //The main thread waits for thread2
     pthread_cond_wait( &readyToFlush2, &mutexReadyToFlush2 );
     pthread_mutex_unlock( &mutexReadyToFlush2 );
-
-    auto end = std::chrono::system_clock::now();
-    waited += std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     //Outputs all the queryResults available
     pthread_mutex_lock( &mutexQueryResults );
@@ -380,19 +414,32 @@ template<typename Type> static const Type& readBody(istream& in,vector<char>& bu
 }
 //---------------------------------------------------------------------------
 //Function that handle behavior of thread1
-void *launchThread1(void *ptr){
+void *launchThread(void *ptr){
     //Retrieves the id of the thread
     int threadId = *((int*) ptr);
     clog << "Thread " << threadId << " just launched!" << endl;
 
-    //Starts working
-    while(true){
-        pthread_mutex_lock( &bigMutex1 );
+    auto& mutexQueriesToProcess = threadId==1 ? mutexQueriesToProcess1 : mutexQueriesToProcess2;
+    auto& queriesToProcess = threadId==1 ? queriesToProcess1 : queriesToProcess2;
+    auto& mutexRelationEditor = threadId==1 ? mutexRelationEditor1 : mutexRelationEditor2;
+    auto& relationEditor = threadId==1 ? relationEditor1 : relationEditor2;
+    auto& mutexNoMoreQuery = threadId==1 ? mutexNoMoreQuery1 : mutexNoMoreQuery2;
+    auto& noMoreQuery = threadId==1 ? noMoreQuery1 : noMoreQuery2;
+    auto& mutexReadyToFlush = threadId==1 ? mutexReadyToFlush1 : mutexReadyToFlush2;
+    auto& readyToFlush = threadId==1 ? readyToFlush1 : readyToFlush2;
+    auto& mutexTransactionHistory = threadId==1 ? mutexTransactionHistory1 : mutexTransactionHistory2;
+    auto& transactionHistory = threadId==1 ? transactionHistory1 : transactionHistory2;
+    auto& mutexNotEmpty = threadId==1 ? mutexNotEmpty1 : mutexNotEmpty2;
+    auto& notEmpty = threadId==1 ? notEmpty1 : notEmpty2;
+    auto& mutexWaiting = threadId==1 ? mutexWaiting1 : mutexWaiting2;
+    auto& waiting = threadId==1 ? waiting1 : waiting2;
 
-        pthread_mutex_lock( &mutexQueriesToProcess1 );
-        if(!queriesToProcess1.empty()){
+    //Starts working
+    while(true){  
+        pthread_mutex_lock( &mutexQueriesToProcess );
+        if(!queriesToProcess.empty()){
             //Gets the query from the list
-            auto front = queriesToProcess1.front();
+            auto front = queriesToProcess.front();
             ValidationQueries v = move(front.first);
             Query q = move(front.second.first);
             vector<Query::Column> columns = move(front.second.second);
@@ -410,18 +457,18 @@ void *launchThread1(void *ptr){
                  * Thread query handle begins
                  */
 
-                pthread_mutex_lock( &mutexRelationEditor1 );
-                pthread_mutex_lock( &mutexTransactionHistory1 );
+                pthread_mutex_lock( &mutexRelationEditor );
+                pthread_mutex_lock( &mutexTransactionHistory );
 
                 bool conflict=false;
 
-                auto vector = relationEditor1[q.relationId];
+                auto vector = relationEditor[q.relationId];
                 auto from = lower_bound(vector.begin(), vector.end(), v.from);
                 auto to = lower_bound(vector.begin(), vector.end(), v.to+1);
 
                 //Loops through the transactions
                 for (auto iter=from; iter!=to; ++iter) {
-                    for (auto& op: transactionHistory1[(*iter)]) {
+                    for (auto& op: transactionHistory[(*iter)]) {
                         // Check if the relation is the same
                         if (op.first!=q.relationId)
                         continue;
@@ -450,8 +497,8 @@ void *launchThread1(void *ptr){
                     if(conflict) break;
                 }
 
-                pthread_mutex_unlock( &mutexRelationEditor1 );
-                pthread_mutex_unlock( &mutexTransactionHistory1 );
+                pthread_mutex_unlock( &mutexRelationEditor );
+                pthread_mutex_unlock( &mutexTransactionHistory );
 
                 //Updates result
                 if(conflict){
@@ -466,134 +513,43 @@ void *launchThread1(void *ptr){
             }
 
             //Erase the query from the list
-            queriesToProcess1.erase(queriesToProcess1.begin());
+            queriesToProcess.erase(queriesToProcess.begin());
 
+            //Unlocks
+            pthread_mutex_unlock( &mutexQueriesToProcess );
         }else{
-            //Uses condition variable to tell the main thread size==0
-            pthread_mutex_lock( &mutexReadyToFlush1 );
-            pthread_cond_signal( &readyToFlush1 );
-            pthread_mutex_unlock( &mutexReadyToFlush1 );
+            //Unlocks
+            pthread_mutex_unlock( &mutexQueriesToProcess );
 
             //If the program is done
-            pthread_mutex_lock( &mutexNoMoreQuery1 );
-            if(noMoreQuery1){
-                pthread_mutex_unlock( &mutexNoMoreQuery1 );
-                break;
+            pthread_mutex_lock( &mutexNoMoreQuery );
+            if(noMoreQuery){
+                clog << "Thread " << threadId << " about to exit..." << endl;
+                pthread_mutex_unlock( &mutexNoMoreQuery );
+                pthread_exit(NULL);
             }
-            pthread_mutex_unlock( &mutexNoMoreQuery1 );
-            pthread_mutex_unlock( &mutexReadyToFlush1 );
-        }
-        pthread_mutex_unlock( &mutexQueriesToProcess1 );
+            pthread_mutex_unlock( &mutexNoMoreQuery );
 
-        pthread_mutex_unlock( &bigMutex1 );
-    }
-    return NULL;
-}
-//---------------------------------------------------------------------------
-//Function that handle behavior of thread2
-void *launchThread2(void *ptr){
-    //Retrieves the id of the thread
-    int threadId = *((int*) ptr);
-    clog << "Thread " << threadId << " just launched!" << endl;
-
-    //Starts working
-    while(true){
-        pthread_mutex_lock( &bigMutex2 );
-        pthread_mutex_lock( &mutexQueriesToProcess2 );
-        if(!queriesToProcess2.empty()){
-
-            //Gets the query from the list
-            auto front = queriesToProcess2.front();
-            ValidationQueries v = move(front.first);
-            Query q = move(front.second.first);
-            vector<Query::Column> columns = move(front.second.second);
-
-            //Retrieves current result
-            pthread_mutex_lock( &mutexQueryResults );
-            if(!queryResults.count(v.validationId)) queryResults[v.validationId]=false;
-            bool currentResult = queryResults[v.validationId]==true;
-            pthread_mutex_unlock( &mutexQueryResults );
-
-            //Handles query only if current result is false
-            if(!currentResult){
-
-                /*
-                 * Thread query handle begins
-                 */
-
-                pthread_mutex_lock( &mutexRelationEditor2 );
-                pthread_mutex_lock( &mutexTransactionHistory2 );
-
-                bool conflict=false;
-
-                auto vector = relationEditor2[q.relationId];
-                auto from = lower_bound(vector.begin(), vector.end(), v.from);
-                auto to = lower_bound(vector.begin(), vector.end(), v.to+1);
-
-                //Loops through the transactions
-                for (auto iter=from; iter!=to; ++iter) {
-                    for (auto& op: transactionHistory2[(*iter)]) {
-                        // Check if the relation is the same
-                        if (op.first!=q.relationId)
-                        continue;
-
-                        // Check if all predicates are satisfied
-                        auto& tuple=op.second;
-                        bool match=true;
-                        for (Query::Column c: columns) {
-                            uint64_t tupleValue=tuple[c.column],queryValue=c.value;
-                            bool result=false;
-                            switch (c.op) {
-                                case Query::Column::Equal: result=(tupleValue==queryValue); break;
-                                case Query::Column::NotEqual: result=(tupleValue!=queryValue); break;
-                                case Query::Column::Less: result=(tupleValue<queryValue); break;
-                                case Query::Column::LessOrEqual: result=(tupleValue<=queryValue); break;
-                                case Query::Column::Greater: result=(tupleValue>queryValue); break;
-                                case Query::Column::GreaterOrEqual: result=(tupleValue>=queryValue); break;
-                            }
-                            if (!result) { match=false; break; }
-                        }
-                        if (match) {
-                            conflict=true;
-                            break;
-                        }
-                    }
-                    if(conflict) break;
-                }
-
-                pthread_mutex_unlock( &mutexRelationEditor2 );
-                pthread_mutex_unlock( &mutexTransactionHistory2 );
-
-                //Updates result
-                if(conflict){
-                    pthread_mutex_lock( &mutexQueryResults );
-                    queryResults[v.validationId]=true;
-                    pthread_mutex_unlock( &mutexQueryResults );
-                }
-
-                /*
-                 * Ends thread query handling
-                 */
-            }
-
-            //Erase the query from the list
-            queriesToProcess2.erase(queriesToProcess2.begin());
-        }else{
             //Uses condition variable to tell the main thread size==0
-            pthread_mutex_lock( &mutexReadyToFlush2 );
-            pthread_cond_signal( &readyToFlush2 );
-            pthread_mutex_unlock( &mutexReadyToFlush2 );
+            pthread_mutex_lock( &mutexReadyToFlush );
+            pthread_cond_signal( &readyToFlush );
 
-            //If the program is done
-            pthread_mutex_lock( &mutexNoMoreQuery2 );
-            if(noMoreQuery2){
-                pthread_mutex_unlock( &mutexNoMoreQuery2 );
-                break;
-            }
-            pthread_mutex_unlock( &mutexNoMoreQuery2 );
+            //Sets waiting to true to indicates its waiting
+            pthread_mutex_lock( &mutexWaiting );
+            pthread_mutex_unlock( &mutexReadyToFlush );
+            waiting = true;
+
+            //Waits for the signal to retry
+            pthread_mutex_lock( &mutexNotEmpty );
+            pthread_mutex_unlock( &mutexWaiting ); //A bit tricky: ensure no signal is sent between
+            pthread_cond_wait( &notEmpty, &mutexNotEmpty );
+            pthread_mutex_unlock( &mutexNotEmpty );
+
+            //Sets waiting to false
+            pthread_mutex_lock( &mutexWaiting );
+            waiting = false;
+            pthread_mutex_unlock( &mutexWaiting );
         }
-        pthread_mutex_unlock( &mutexQueriesToProcess2 );
-        pthread_mutex_unlock( &bigMutex2 );
     }
     return NULL;
 }
@@ -603,8 +559,8 @@ int main()
     //Initializes thread1 & thread2
     pthread_t thread1, thread2;
     int thread1Id = 1, thread2Id = 2;
-    if( pthread_create( &thread1, NULL, launchThread1, (void*) &thread1Id)
-            || pthread_create( &thread2, NULL, launchThread2, (void*) &thread2Id) ) {
+    if( pthread_create( &thread1, NULL, launchThread, (void*) &thread1Id)
+            || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id) ) {
         clog << "Error while creating the threads" << endl;
         exit(EXIT_FAILURE);
     }
@@ -649,7 +605,6 @@ int main()
                 //Wait for the threads to end
                 pthread_join(thread1, NULL);
                 pthread_join(thread2, NULL);
-                clog << "Waited " << waited << "ms" << endl;
                 return 0;
             default:
                 // crude error handling, should never happen
