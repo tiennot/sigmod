@@ -133,38 +133,38 @@ struct Forget {
 // Begin reference implementation
 //---------------------------------------------------------------------------
 
+//Our four threads
+enum AuxThread : uint32_t { Thread1, Thread2, Thread3, Thread4 };
+
 //Stores the schema
 static vector<uint32_t> schema;
 
 //Stores the content of the relations (i.e. tuples) + mutex
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
+//Map one relation to one thread
+static map<uint32_t, AuxThread> assignedThreads;
+
 //Maps the Id of a transaction with a pair containing relationId, tuple values
-static map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>> transactionHistory1;
-static map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>> transactionHistory2;
+static map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>>
+    transactionHistory1, transactionHistory2, transactionHistory3, transactionHistory4;
 
 //Stores the booleans for output + mutex
 static map<uint64_t,bool> queryResults;
 pthread_mutex_t mutexQueryResults = PTHREAD_MUTEX_INITIALIZER;
 
 //Store for each relationId the transactions that affected the relation
-static map<uint32_t, vector<uint64_t>> relationEditor1;
-static map<uint32_t, vector<uint64_t>> relationEditor2;
+static map<uint32_t, vector<uint64_t>>
+    relationEditor1, relationEditor2, relationEditor3, relationEditor4;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each thread
-static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess1;
-static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess2;
+static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>
+    queriesToProcess1, queriesToProcess2, queriesToProcess3, queriesToProcess4;
 
 //---------------------------------------------------------------------------
-//Function that tells which thread handle a given relation
-inline static int assignedThread(uint32_t relationId){
-    /*
-     * 0 is the main thread which performs insertions, deletion, flush, etc.
-     * 1 performs half the validations
-     * 2 performs half the validations
-     * Hence this function returns either 1 or 2 but should never return 0
-     */
-    return relationId<=15 ? 1 : 2;
+//Function that tells which thread handles a given relation
+inline static AuxThread assignedThread(uint32_t relationId){
+    return assignedThreads[relationId];
 }
 //---------------------------------------------------------------------------
 static void processDefineSchema(const DefineSchema& d)
@@ -177,32 +177,57 @@ static void processDefineSchema(const DefineSchema& d)
     //Resizes relation vector
     relations.clear();
     relations.resize(d.relationCount);
+
+    //Maps relations with threads
+    assignedThreads.clear();
+    for(uint32_t i=0; i<d.relationCount; ++i){
+        if(i<d.relationCount/4) assignedThreads[i]=Thread1;
+        else if(i<d.relationCount/2) assignedThreads[i]=Thread2;
+        else if(i<3*d.relationCount/4) assignedThreads[i]=Thread3;
+        else assignedThreads[i]=Thread4;
+    }
 }
 //---------------------------------------------------------------------------
 static void processTransaction(const Transaction& t)
 {
-    vector<pair<uint32_t,vector<uint64_t>>> operations1;
-    vector<pair<uint32_t,vector<uint64_t>>> operations2;
+    vector<pair<uint32_t,vector<uint64_t>>> operations1, operations2, operations3, operations4;
     const char* reader=t.operations;
 
     //Keeps track of the relations we updated
-    set<uint32_t> relationsEdited1;
-    set<uint32_t> relationsEdited2;
+    set<uint32_t> relationsEdited1, relationsEdited2, relationsEdited3, relationsEdited4;
 
     // Delete all indicated tuples
     for (uint32_t index=0;index!=t.deleteCount;++index) {
         const TransactionOperationDelete* o= (const TransactionOperationDelete*) reader;
 
         //Switch according to the thread assigned
-        auto& operations = assignedThread(o->relationId)==1 ? operations1 : operations2;
-        auto& relationsEdited = assignedThread(o->relationId)==1 ? relationsEdited1 : relationsEdited2;
+        AuxThread thread = assignedThread(o->relationId);
+        vector<pair<uint32_t,vector<uint64_t>>> * operations = NULL;
+        set<uint32_t> * relationsEdited = NULL;
+        switch(thread){
+            case Thread1:
+                operations = &operations1;
+                relationsEdited = &relationsEdited1;
+                break;
+            case Thread2:
+                operations = &operations2;
+                relationsEdited = &relationsEdited2;
+                break;
+            case Thread3:
+                operations = &operations3;
+                relationsEdited = &relationsEdited3;
+                break;
+            default:
+                operations = &operations4;
+                relationsEdited = &relationsEdited4;
+        }
 
-        relationsEdited.insert(o->relationId);
+        relationsEdited->insert(o->relationId);
         //Loops through the tuples to delete
         for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
             //If the tuple key exists in the relation
             if (relations[o->relationId].count(*key)) {
-                operations.push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,move(relations[o->relationId][*key])));
+                operations->push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,move(relations[o->relationId][*key])));
                 relations[o->relationId].erase(*key);
             }
         }
@@ -214,35 +239,62 @@ static void processTransaction(const Transaction& t)
         const TransactionOperationInsert* o= (const TransactionOperationInsert*) reader;
 
         //Switch according to the thread assigned
-        auto& operations = assignedThread(o->relationId)==1 ? operations1 : operations2;
-        auto& relationsEdited = assignedThread(o->relationId)==1 ? relationsEdited1 : relationsEdited2;
+        AuxThread thread = assignedThread(o->relationId);
+        vector<pair<uint32_t,vector<uint64_t>>> * operations = NULL;
+        set<uint32_t> * relationsEdited = NULL;
+        switch(thread){
+            case Thread1:
+                operations = &operations1;
+                relationsEdited = &relationsEdited1;
+                break;
+            case Thread2:
+                operations = &operations2;
+                relationsEdited = &relationsEdited2;
+                break;
+            case Thread3:
+                operations = &operations3;
+                relationsEdited = &relationsEdited3;
+                break;
+            default:
+                operations = &operations4;
+                relationsEdited = &relationsEdited4;
+        }
 
-        relationsEdited.insert(o->relationId);
+        relationsEdited->insert(o->relationId);
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
             vector<uint64_t> tuple;
             tuple.insert(tuple.begin(),values,values+schema[o->relationId]);
-            operations.push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,tuple));
+            operations->push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,tuple));
             relations[o->relationId][values[0]]=move(tuple);
         }
         reader+=sizeof(TransactionOperationInsert)+(sizeof(uint64_t)*o->rowCount*schema[o->relationId]);
     }
 
-    //Register transaction as editor for thread 1
+    //Register transaction for thread 1
     for(auto iter : relationsEdited1){
         relationEditor1[iter].push_back(t.transactionId);
     }
-
-    //Register transaction for thread 1
     transactionHistory1[t.transactionId]=move(operations1);
 
-    //Register transaction as editor for thread 2
+    //Register transaction for thread 2
     for(auto iter : relationsEdited2){
         relationEditor2[iter].push_back(t.transactionId);
     }
-
-    //Register transaction for thread 2
     transactionHistory2[t.transactionId]=move(operations2);
+
+    //Register transaction for thread 3
+    for(auto iter : relationsEdited3){
+        relationEditor3[iter].push_back(t.transactionId);
+    }
+    transactionHistory3[t.transactionId]=move(operations3);
+
+    //Register transaction for thread 4
+    for(auto iter : relationsEdited4){
+        relationEditor4[iter].push_back(t.transactionId);
+    }
+    transactionHistory4[t.transactionId]=move(operations4);
+
 }
 //---------------------------------------------------------------------------
 static void processValidationQueries(const ValidationQueries& v)
@@ -259,10 +311,19 @@ static void processValidationQueries(const ValidationQueries& v)
         }
 
         //Adds query to the list to process by the relevant thread
-        if(assignedThread(q.relationId)==1){
-            queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
-        }else{
-            queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+        switch(assignedThread(q.relationId)){
+            case Thread1:
+                queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+                break;
+            case Thread2:
+                queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+                break;
+            case Thread3:
+                queriesToProcess3.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+                break;
+            default:
+                queriesToProcess4.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+                break;
         }
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*columnCount);
@@ -271,18 +332,21 @@ static void processValidationQueries(const ValidationQueries& v)
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
 {
-    //Instanciates to threads to process the queries
-    pthread_t thread1, thread2;
-    int thread1Id = 1, thread2Id = 2;
+    //Instanciates four threads to process the queries
+    pthread_t thread1, thread2, thread3, thread4;
+    int thread1Id = 1, thread2Id = 2, thread3Id = 3, thread4Id = 4;
     if( pthread_create( &thread1, NULL, launchThread, (void*) &thread1Id)
-            || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id) ) {
-        clog << "Error while creating the threads" << endl;
+            || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id)
+            || pthread_create( &thread3, NULL, launchThread, (void*) &thread3Id)
+            || pthread_create( &thread4, NULL, launchThread, (void*) &thread4Id)) {
         exit(EXIT_FAILURE);
     }
 
-    //Waits for the two threads to end
+    //Waits for the four threads to end
     pthread_join(thread1, NULL);
     pthread_join(thread2, NULL);
+    pthread_join(thread3, NULL);
+    pthread_join(thread4, NULL);
 
     //Outputs all the queryResults available
     pthread_mutex_lock( &mutexQueryResults );
@@ -307,6 +371,14 @@ static void processForget(const Forget& f)
     while ((!transactionHistory2.empty())&&((*transactionHistory2.begin()).first<=f.transactionId))
         transactionHistory2.erase(transactionHistory2.begin());
 
+    //Erase from transaction history of thread3
+    while ((!transactionHistory3.empty())&&((*transactionHistory3.begin()).first<=f.transactionId))
+        transactionHistory3.erase(transactionHistory3.begin());
+
+    //Erase from transaction history of thread4
+    while ((!transactionHistory4.empty())&&((*transactionHistory4.begin()).first<=f.transactionId))
+        transactionHistory4.erase(transactionHistory4.begin());
+
     //Erase from relation editors for thread1
     for(auto iter : relationEditor1){
         vector<uint64_t> editors = iter.second;
@@ -317,6 +389,22 @@ static void processForget(const Forget& f)
 
     //Erase from relation editors for thread2
     for(auto iter : relationEditor2){
+        vector<uint64_t> editors = iter.second;
+        while(!editors.empty() && *(editors.begin())<= f.transactionId){
+            editors.erase(editors.begin());
+        }
+    }
+
+    //Erase from relation editors for thread3
+    for(auto iter : relationEditor3){
+        vector<uint64_t> editors = iter.second;
+        while(!editors.empty() && *(editors.begin())<= f.transactionId){
+            editors.erase(editors.begin());
+        }
+    }
+
+    //Erase from relation editors for thread4
+    for(auto iter : relationEditor4){
         vector<uint64_t> editors = iter.second;
         while(!editors.empty() && *(editors.begin())<= f.transactionId){
             editors.erase(editors.begin());
@@ -337,15 +425,38 @@ void *launchThread(void *ptr){
     int threadId = *((int*) ptr);
 
     //Defines aliases for variables according to threadId
-    auto& queriesToProcess = threadId==1 ? queriesToProcess1 : queriesToProcess2;
-    auto& relationEditor = threadId==1 ? relationEditor1 : relationEditor2;
-    auto& transactionHistory = threadId==1 ? transactionHistory1 : transactionHistory2;
+    vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcess = NULL;
+    map<uint32_t, vector<uint64_t>> * relationEditor = NULL;
+    map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>> * transactionHistory = NULL;
+
+    switch(threadId){
+        case 1:
+            queriesToProcess = &queriesToProcess1;
+            relationEditor = &relationEditor1;
+            transactionHistory = &transactionHistory1;
+            break;
+        case 2:
+            queriesToProcess = &queriesToProcess2;
+            relationEditor = &relationEditor2;
+            transactionHistory = &transactionHistory2;
+            break;
+        case 3:
+            queriesToProcess = &queriesToProcess3;
+            relationEditor = &relationEditor3;
+            transactionHistory = &transactionHistory3;
+            break;
+        case 4:
+            queriesToProcess = &queriesToProcess4;
+            relationEditor = &relationEditor4;
+            transactionHistory = &transactionHistory4;
+            break;
+    }
 
     //Starts working
-    while(true){  
-        if(!queriesToProcess.empty()){
+    while(true){
+        if(!queriesToProcess->empty()){
             //Gets the query from the list
-            auto back = queriesToProcess.back();
+            auto back = queriesToProcess->back();
             ValidationQueries v = move(back.first);
             Query q = move(back.second.first);
             vector<Query::Column> columns = move(back.second.second);
@@ -365,13 +476,13 @@ void *launchThread(void *ptr){
 
                 bool conflict=false;
 
-                auto vector = relationEditor[q.relationId];
+                auto vector = (*relationEditor)[q.relationId];
                 auto from = lower_bound(vector.begin(), vector.end(), v.from);
                 auto to = lower_bound(vector.begin(), vector.end(), v.to+1);
 
                 //Loops through the transactions
                 for (auto iter=from; iter!=to; ++iter) {
-                    for (auto& op: transactionHistory[(*iter)]) {
+                    for (auto& op: (*transactionHistory)[(*iter)]) {
                         // Check if the relation is the same
                         if (op.first!=q.relationId)
                         continue;
@@ -413,7 +524,7 @@ void *launchThread(void *ptr){
             }
 
             //Erase the query from the list
-            queriesToProcess.pop_back();
+            queriesToProcess->pop_back();
         }else{
             pthread_exit(NULL);
         }
