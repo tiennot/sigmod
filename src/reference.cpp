@@ -364,51 +364,39 @@ static void processFlush(const Flush& f)
 static void processForget(const Forget& f)
 {
     //Erase from transaction history of thread1
-    while ((!transactionHistory1.empty())&&((*transactionHistory1.begin()).first<=f.transactionId))
-        transactionHistory1.erase(transactionHistory1.begin());
+    transactionHistory1.erase(transactionHistory1.begin(), transactionHistory1.lower_bound(f.transactionId));
 
     //Erase from transaction history of thread2
-    while ((!transactionHistory2.empty())&&((*transactionHistory2.begin()).first<=f.transactionId))
-        transactionHistory2.erase(transactionHistory2.begin());
+    transactionHistory2.erase(transactionHistory2.begin(), transactionHistory2.lower_bound(f.transactionId));
 
     //Erase from transaction history of thread3
-    while ((!transactionHistory3.empty())&&((*transactionHistory3.begin()).first<=f.transactionId))
-        transactionHistory3.erase(transactionHistory3.begin());
+    transactionHistory3.erase(transactionHistory3.begin(), transactionHistory3.lower_bound(f.transactionId));
 
     //Erase from transaction history of thread4
-    while ((!transactionHistory4.empty())&&((*transactionHistory4.begin()).first<=f.transactionId))
-        transactionHistory4.erase(transactionHistory4.begin());
+    transactionHistory4.erase(transactionHistory4.begin(), transactionHistory4.lower_bound(f.transactionId));
 
     //Erase from relation editors for thread1
     for(auto iter : relationEditor1){
-        vector<uint64_t> editors = iter.second;
-        while(!editors.empty() && *(editors.begin())<= f.transactionId){
-            editors.erase(editors.begin());
-        }
+        vector<uint64_t> * editors = &iter.second;
+        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
     }
 
     //Erase from relation editors for thread2
     for(auto iter : relationEditor2){
-        vector<uint64_t> editors = iter.second;
-        while(!editors.empty() && *(editors.begin())<= f.transactionId){
-            editors.erase(editors.begin());
-        }
+        vector<uint64_t> * editors = &iter.second;
+        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
     }
 
     //Erase from relation editors for thread3
     for(auto iter : relationEditor3){
-        vector<uint64_t> editors = iter.second;
-        while(!editors.empty() && *(editors.begin())<= f.transactionId){
-            editors.erase(editors.begin());
-        }
+        vector<uint64_t> * editors = &iter.second;
+        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
     }
 
     //Erase from relation editors for thread4
     for(auto iter : relationEditor4){
-        vector<uint64_t> editors = iter.second;
-        while(!editors.empty() && *(editors.begin())<= f.transactionId){
-            editors.erase(editors.begin());
-        }
+        vector<uint64_t> * editors = &iter.second;
+        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
     }
 }
 //---------------------------------------------------------------------------
