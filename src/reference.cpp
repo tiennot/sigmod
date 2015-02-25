@@ -349,13 +349,11 @@ static void processFlush(const Flush& f)
     pthread_join(thread4, NULL);
 
     //Outputs all the queryResults available
-    pthread_mutex_lock( &mutexQueryResults );
     while ((!queryResults.empty())&&((*queryResults.begin()).first<=f.validationId)) {
         char c='0'+(*queryResults.begin()).second;
         cout.write(&c,1);
         queryResults.erase(queryResults.begin());
     }
-    pthread_mutex_unlock( &mutexQueryResults );
 
     //Flush output
     cout.flush();
