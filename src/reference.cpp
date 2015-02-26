@@ -323,22 +323,22 @@ static void processValidationQueries(const ValidationQueries& v)
         vector<Query::Column> vColumns;
         uint32_t columnCount = q.columnCount;
         for (auto c=q.columns,cLimit=c+columnCount;c!=cLimit;++c){
-            vColumns.push_back(move(*c));
+            vColumns.push_back(*c);
         }
 
         //Adds query to the list to process by the relevant thread
         switch(assignedThread(q.relationId)){
             case Thread1:
-                queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(move(q), move(vColumns))));
+                queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
             case Thread2:
-                queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(move(q), move(vColumns))));
+                queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
             case Thread3:
-                queriesToProcess3.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(move(q), move(vColumns))));
+                queriesToProcess3.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
             default:
-                queriesToProcess4.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(move(q), move(vColumns))));
+                queriesToProcess4.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
         }
         //Offsets reader
