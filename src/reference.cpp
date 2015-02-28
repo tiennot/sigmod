@@ -504,9 +504,9 @@ void *launchThread(void *ptr){
 
                 bool conflict=false;
 
-                auto vector = (*relationEditor)[q.relationId];
-                auto from = lower_bound(vector.begin(), vector.end(), v.from);
-                auto to = lower_bound(vector.begin(), vector.end(), v.to+1);
+                auto * vector = &((*relationEditor)[q.relationId]);
+                auto from = lower_bound(vector->begin(), vector->end(), v.from);
+                auto to = lower_bound(vector->begin(), vector->end(), v.to+1);
 
                 //Loops through the transactions
                 for (auto iter=from; iter!=to; ++iter) {
