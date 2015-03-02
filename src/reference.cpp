@@ -197,23 +197,6 @@ pthread_mutex_t mutexQueryResults = PTHREAD_MUTEX_INITIALIZER;
 //Lists of (validationQuery, (query, columns)) to be processed by each thread
 static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>
     queriesToProcess1, queriesToProcess2, queriesToProcess3, queriesToProcess4;
-
-//Four condition variables + mutexes to synchronize threads
-pthread_cond_t  cond1   = PTHREAD_COND_INITIALIZER;
-pthread_cond_t  cond2   = PTHREAD_COND_INITIALIZER;
-pthread_cond_t  cond3   = PTHREAD_COND_INITIALIZER;
-pthread_cond_t  cond4   = PTHREAD_COND_INITIALIZER;
-pthread_mutex_t mut1    = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mut2    = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mut3    = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mut4    = PTHREAD_MUTEX_INITIALIZER;
-
-//Variables to tells thread to terminate
-static bool endThread1 = false;
-static bool endThread2 = false;
-static bool endThread3 = false;
-static bool endThread4 = false;
-
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
 inline static AuxThread assignedThread(uint32_t relationId){
@@ -374,27 +357,21 @@ static void processValidationQueries(const ValidationQueries& v)
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
 {
-    //Sends signal to aux threads
-    pthread_mutex_lock( &mut1 );
-    pthread_cond_signal( &cond1 );
-    pthread_mutex_lock( &mut2 );
-    pthread_cond_signal( &cond2 );
-    pthread_mutex_lock( &mut3 );
-    pthread_cond_signal( &cond3 );
-    pthread_mutex_lock( &mut4 );
-    pthread_cond_signal( &cond4 );
+    //Instanciates four threads to process the queries
+    pthread_t thread1, thread2, thread3, thread4;
+    int thread1Id = 1, thread2Id = 2, thread3Id = 3, thread4Id = 4;
+    if( pthread_create( &thread1, NULL, launchThread, (void*) &thread1Id)
+            || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id)
+            || pthread_create( &thread3, NULL, launchThread, (void*) &thread3Id)
+            || pthread_create( &thread4, NULL, launchThread, (void*) &thread4Id)) {
+        exit(EXIT_FAILURE);
+    }
 
-    //Waits for aux threads to end processing
-    pthread_cond_wait( &cond1, &mut1 );
-    pthread_cond_wait( &cond2, &mut2 );
-    pthread_cond_wait( &cond3, &mut3 );
-    pthread_cond_wait( &cond4, &mut4 );
-
-    //Unlock the mutexes
-    pthread_mutex_unlock( &mut1 );
-    pthread_mutex_unlock( &mut2 );
-    pthread_mutex_unlock( &mut3 );
-    pthread_mutex_unlock( &mut4 );
+    //Waits for the four threads to end
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+    pthread_join(thread3, NULL);
+    pthread_join(thread4, NULL);
 
     //Outputs all the queryResults available
     pthread_mutex_lock( &mutexQueryResults );
@@ -497,52 +474,32 @@ void *launchThread(void *ptr){
     vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcess = NULL;
     map<Tuple, vector<uint64_t>> * tupleContentPtr = NULL;
     map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr = NULL;
-    pthread_cond_t * cond = NULL;
-    pthread_mutex_t * mut = NULL;
-    bool * endThread = NULL;
 
     switch(threadId){
         case 1:
             queriesToProcess = &queriesToProcess1;
             tupleContentPtr = &tupleContent1;
             transactionHistoryPtr = &transactionHistory1;
-            cond = &cond1;
-            mut = &mut1;
-            endThread = &endThread1;
             break;
         case 2:
             queriesToProcess = &queriesToProcess2;
             tupleContentPtr = &tupleContent2;
             transactionHistoryPtr = &transactionHistory2;
-            cond = &cond2;
-            mut = &mut2;
-            endThread = &endThread2;
             break;
         case 3:
             queriesToProcess = &queriesToProcess3;
             tupleContentPtr = &tupleContent3;
             transactionHistoryPtr = &transactionHistory3;
-            cond = &cond3;
-            mut = &mut3;
-            endThread = &endThread3;
             break;
         case 4:
             queriesToProcess = &queriesToProcess4;
             tupleContentPtr = &tupleContent4;
             transactionHistoryPtr = &transactionHistory4;
-            cond = &cond4;
-            mut = &mut4;
-            endThread = &endThread4;
             break;
     }
 
     map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *transactionHistoryPtr;
     map<Tuple, vector<uint64_t>>& tupleContent = *tupleContentPtr;
-
-    //Waits for the main thread signal (first time)
-    pthread_mutex_lock( mut );
-    pthread_cond_wait( cond, mut );
-    pthread_mutex_unlock( mut );
 
     //Starts working
     while(true){
@@ -674,20 +631,7 @@ void *launchThread(void *ptr){
             //Erase the query from the list
             queriesToProcess->pop_back();
         }else{
-            //Sends signal to tell main thread processing is done
-            pthread_mutex_lock( mut );
-            pthread_cond_signal( cond );
-            pthread_mutex_unlock( mut );
-
-            //Waits for the main thread signal
-            pthread_mutex_lock( mut );
-            pthread_cond_wait( cond, mut );
-            if(*endThread){
-                pthread_mutex_unlock( mut );
-                exit(EXIT_SUCCESS);
-            }
-            pthread_mutex_unlock( mut );
-
+            pthread_exit(EXIT_SUCCESS);
         }
     }
     //Should never get there
@@ -696,16 +640,6 @@ void *launchThread(void *ptr){
 //---------------------------------------------------------------------------
 int main()
 {
-    //Instanciates four threads to process the queries
-    pthread_t thread1, thread2, thread3, thread4;
-    int thread1Id = 1, thread2Id = 2, thread3Id = 3, thread4Id = 4;
-    if( pthread_create( &thread1, NULL, launchThread, (void*) &thread1Id)
-            || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id)
-            || pthread_create( &thread3, NULL, launchThread, (void*) &thread3Id)
-            || pthread_create( &thread4, NULL, launchThread, (void*) &thread4Id)) {
-        exit(EXIT_FAILURE);
-    }
-
     vector<char> message;
     while (true) {
         // Retrieve the message
@@ -735,28 +669,6 @@ int main()
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
-                //Tells the threads to exit
-                pthread_mutex_lock( &mut1 );
-                pthread_mutex_lock( &mut2 );
-                pthread_mutex_lock( &mut3 );
-                pthread_mutex_lock( &mut4 );
-                endThread1 = true;
-                endThread2 = true;
-                endThread3 = true;
-                endThread4 = true;
-                pthread_cond_signal( &cond1 );
-                pthread_cond_signal( &cond2 );
-                pthread_cond_signal( &cond3 );
-                pthread_cond_signal( &cond4 );
-                pthread_mutex_unlock( &mut1 );
-                pthread_mutex_unlock( &mut2 );
-                pthread_mutex_unlock( &mut3 );
-                pthread_mutex_unlock( &mut4 );
-                //Waits for the four threads to end
-                pthread_join(thread1, NULL);
-                pthread_join(thread2, NULL);
-                pthread_join(thread3, NULL);
-                pthread_join(thread4, NULL);
                 return 0;
             default:
                 // crude error handling, should never happen
