@@ -30,6 +30,7 @@
 #include <iostream>
 #include <map>
 #include <vector>
+#include <chrono>
 #include <set>
 #include <cassert>
 #include <cstdint>
@@ -136,26 +137,62 @@ struct Forget {
 //Our four threads
 enum AuxThread : uint32_t { Thread1, Thread2, Thread3, Thread4 };
 
+//A structure to identify a unique tuple
+struct Tuple {
+    uint64_t transactionId; //Id of the transaction
+    uint64_t internId; //Index of the insertion/deletion
+
+    bool operator<(const Tuple& tuple) const{
+        return transactionId < tuple.transactionId ||
+                (transactionId==tuple.transactionId && internId<tuple.internId);
+    }
+
+    bool operator==(const Tuple& tuple) const{
+        return transactionId==tuple.transactionId && internId==tuple.internId;
+    }
+
+    friend ostream &operator<<(ostream &out, Tuple tuple){
+        out << "Tuple{TransId=" << tuple.transactionId;
+        out << " InternId=" << tuple.internId << "}";
+        return out;
+    }
+};
+
+//A structure to identify a unique column
+struct UniqueColumn {
+    uint32_t relationId; //Id of the relation
+    uint32_t column; //The column number
+
+    bool operator<(const UniqueColumn& col) const{
+        return relationId < col.relationId
+                || (relationId==col.relationId && column<col.column);
+    }
+
+    bool operator==(const UniqueColumn& col) const{
+        return relationId == col.relationId && column == col.column;
+    }
+};
+
 //Stores the schema
 static vector<uint32_t> schema;
 
 //Stores the content of the relations (i.e. tuples) + mutex
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
-//Map one relation to one thread
-static map<uint32_t, AuxThread> assignedThreads;
+//Maps one relation to one thread
+static vector<AuxThread> assignedThreads;
 
-//Maps the Id of a transaction with a pair containing relationId, tuple values
-static map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>>
+//Maps tuples to their content
+static map<Tuple, vector<uint64_t>>
+    tupleContent1, tupleContent2, tupleContent3, tupleContent4;
+
+//Maps a relation's column and a value to the tuples that affected it
+static map<UniqueColumn, map<uint64_t, vector<Tuple>>>
     transactionHistory1, transactionHistory2, transactionHistory3, transactionHistory4;
 
 //Stores the booleans for output + mutex
 static map<uint64_t,bool> queryResults;
 pthread_mutex_t mutexQueryResults = PTHREAD_MUTEX_INITIALIZER;
-
-//Store for each relationId the transactions that affected the relation
-static map<uint32_t, vector<uint64_t>>
-    relationEditor1, relationEditor2, relationEditor3, relationEditor4;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each thread
 static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>
@@ -180,7 +217,7 @@ static bool endThread4 = false;
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
 inline static AuxThread assignedThread(uint32_t relationId){
-    return assignedThreads[relationId];
+    return assignedThreads[relationId]; //TODO return relationId%4 ???
 }
 //---------------------------------------------------------------------------
 static void processDefineSchema(const DefineSchema& d)
@@ -195,7 +232,7 @@ static void processDefineSchema(const DefineSchema& d)
     relations.resize(d.relationCount);
 
     //Maps relations with threads
-    assignedThreads.clear();
+    assignedThreads.resize(d.relationCount);
     for(uint32_t i=0; i<d.relationCount; ++i){
         if(i<d.relationCount/4) assignedThreads[i]=Thread1;
         else if(i<d.relationCount/2) assignedThreads[i]=Thread2;
@@ -206,11 +243,9 @@ static void processDefineSchema(const DefineSchema& d)
 //---------------------------------------------------------------------------
 static void processTransaction(const Transaction& t)
 {
-    vector<pair<uint32_t,vector<uint64_t>>> operations1, operations2, operations3, operations4;
+    //Tuple identifier
+    Tuple tuple{t.transactionId, 0};
     const char* reader=t.operations;
-
-    //Keeps track of the relations we updated
-    set<uint32_t> relationsEdited1, relationsEdited2, relationsEdited3, relationsEdited4;
 
     // Delete all indicated tuples
     for (uint32_t index=0;index!=t.deleteCount;++index) {
@@ -218,33 +253,42 @@ static void processTransaction(const Transaction& t)
 
         //Switch according to the thread assigned
         AuxThread thread = assignedThread(o->relationId);
-        vector<pair<uint32_t,vector<uint64_t>>> * operations = NULL;
-        set<uint32_t> * relationsEdited = NULL;
+        map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistory = NULL;
+        map<Tuple, vector<uint64_t>> * tupleContent = NULL;
         switch(thread){
             case Thread1:
-                operations = &operations1;
-                relationsEdited = &relationsEdited1;
+                transactionHistory = &transactionHistory1;
+                tupleContent = &tupleContent1;
                 break;
             case Thread2:
-                operations = &operations2;
-                relationsEdited = &relationsEdited2;
+                transactionHistory = &transactionHistory2;
+                tupleContent = &tupleContent2;
                 break;
             case Thread3:
-                operations = &operations3;
-                relationsEdited = &relationsEdited3;
+                transactionHistory = &transactionHistory3;
+                tupleContent = &tupleContent3;
                 break;
             default:
-                operations = &operations4;
-                relationsEdited = &relationsEdited4;
+                transactionHistory = &transactionHistory4;
+                tupleContent = &tupleContent4;
         }
 
-        relationsEdited->insert(o->relationId);
         //Loops through the tuples to delete
         for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
             //If the tuple key exists in the relation
             if (relations[o->relationId].count(*key)) {
-                operations->push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,move(relations[o->relationId][*key])));
+                vector<uint64_t> tupleValues = relations[o->relationId][*key];
+                //For each column we add the value to the history
+                for(uint32_t col=0; col!=schema[o->relationId]; ++col){
+                    UniqueColumn uCol{o->relationId, col};
+                    (*transactionHistory)[uCol][tupleValues[col]].push_back(tuple);
+
+                }
+                //Move to tupleContent and erase
+                (*tupleContent)[tuple]=move(tupleValues);
                 relations[o->relationId].erase(*key);
+                //Increments internId
+                ++tuple.internId;
             }
         }
         reader+=sizeof(TransactionOperationDelete)+(sizeof(uint64_t)*o->rowCount);
@@ -256,61 +300,43 @@ static void processTransaction(const Transaction& t)
 
         //Switch according to the thread assigned
         AuxThread thread = assignedThread(o->relationId);
-        vector<pair<uint32_t,vector<uint64_t>>> * operations = NULL;
-        set<uint32_t> * relationsEdited = NULL;
+        map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistory = NULL;
+        map<Tuple, vector<uint64_t>> * tupleContent = NULL;
         switch(thread){
             case Thread1:
-                operations = &operations1;
-                relationsEdited = &relationsEdited1;
+                transactionHistory = &transactionHistory1;
+                tupleContent = &tupleContent1;
                 break;
             case Thread2:
-                operations = &operations2;
-                relationsEdited = &relationsEdited2;
+                transactionHistory = &transactionHistory2;
+                tupleContent = &tupleContent2;
                 break;
             case Thread3:
-                operations = &operations3;
-                relationsEdited = &relationsEdited3;
+                transactionHistory = &transactionHistory3;
+                tupleContent = &tupleContent3;
                 break;
             default:
-                operations = &operations4;
-                relationsEdited = &relationsEdited4;
+                transactionHistory = &transactionHistory4;
+                tupleContent = &tupleContent4;
         }
 
-        relationsEdited->insert(o->relationId);
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
-            vector<uint64_t> tuple;
-            tuple.insert(tuple.begin(),values,values+schema[o->relationId]);
-            operations->push_back(pair<uint32_t,vector<uint64_t>>(o->relationId,tuple));
-            relations[o->relationId][values[0]]=move(tuple);
+            vector<uint64_t> tupleValues;
+            tupleValues.insert(tupleValues.begin(),values,values+schema[o->relationId]);
+            //For each column we add the value to the history
+            for(uint32_t col=0; col!=schema[o->relationId]; ++col){
+                UniqueColumn uCol{o->relationId, col};
+                (*transactionHistory)[uCol][tupleValues[col]].push_back(tuple);
+            }
+            //Adds to tupleContent and inserts
+            (*tupleContent)[tuple]= tupleValues;
+            relations[o->relationId][values[0]]=move(tupleValues);
+            //Increments internId
+            ++tuple.internId;
         }
         reader+=sizeof(TransactionOperationInsert)+(sizeof(uint64_t)*o->rowCount*schema[o->relationId]);
     }
-
-    //Register transaction for thread 1
-    for(auto iter : relationsEdited1){
-        relationEditor1[iter].push_back(t.transactionId);
-    }
-    transactionHistory1[t.transactionId]=move(operations1);
-
-    //Register transaction for thread 2
-    for(auto iter : relationsEdited2){
-        relationEditor2[iter].push_back(t.transactionId);
-    }
-    transactionHistory2[t.transactionId]=move(operations2);
-
-    //Register transaction for thread 3
-    for(auto iter : relationsEdited3){
-        relationEditor3[iter].push_back(t.transactionId);
-    }
-    transactionHistory3[t.transactionId]=move(operations3);
-
-    //Register transaction for thread 4
-    for(auto iter : relationsEdited4){
-        relationEditor4[iter].push_back(t.transactionId);
-    }
-    transactionHistory4[t.transactionId]=move(operations4);
-
 }
 //---------------------------------------------------------------------------
 static void processValidationQueries(const ValidationQueries& v)
@@ -371,11 +397,13 @@ static void processFlush(const Flush& f)
     pthread_mutex_unlock( &mut4 );
 
     //Outputs all the queryResults available
+    pthread_mutex_lock( &mutexQueryResults );
     while ((!queryResults.empty())&&((*queryResults.begin()).first<=f.validationId)) {
         char c='0'+(*queryResults.begin()).second;
         cout.write(&c,1);
         queryResults.erase(queryResults.begin());
     }
+    pthread_mutex_unlock( &mutexQueryResults );
 
     //Flush output
     cout.flush();
@@ -383,41 +411,50 @@ static void processFlush(const Flush& f)
 //---------------------------------------------------------------------------
 static void processForget(const Forget& f)
 {
+    Tuple bound{f.transactionId, 0};
+
     //Erase from transaction history of thread1
-    transactionHistory1.erase(transactionHistory1.begin(), transactionHistory1.lower_bound(f.transactionId));
+    for(auto iter=transactionHistory1.begin(); iter!=transactionHistory1.end(); ++iter){
+        auto * secondMap = &(iter->second);
+        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+            vector<Tuple> * tuples = &(iter2->second);
+            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+        }
+    }
 
     //Erase from transaction history of thread2
-    transactionHistory2.erase(transactionHistory2.begin(), transactionHistory2.lower_bound(f.transactionId));
+    for(auto iter=transactionHistory2.begin(); iter!=transactionHistory2.end(); ++iter){
+        auto * secondMap = &(iter->second);
+        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+            vector<Tuple> * tuples = &(iter2->second);
+            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+        }
+    }
 
     //Erase from transaction history of thread3
-    transactionHistory3.erase(transactionHistory3.begin(), transactionHistory3.lower_bound(f.transactionId));
+    for(auto iter=transactionHistory3.begin(); iter!=transactionHistory3.end(); ++iter){
+        auto * secondMap = &(iter->second);
+        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+            vector<Tuple> * tuples = &(iter2->second);
+            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+        }
+    }
 
     //Erase from transaction history of thread4
-    transactionHistory4.erase(transactionHistory4.begin(), transactionHistory4.lower_bound(f.transactionId));
-
-    //Erase from relation editors for thread1
-    for(auto iter : relationEditor1){
-        vector<uint64_t> * editors = &iter.second;
-        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
+    for(auto iter=transactionHistory4.begin(); iter!=transactionHistory4.end(); ++iter){
+        auto * secondMap = &(iter->second);
+        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+            vector<Tuple> * tuples = &(iter2->second);
+            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+        }
     }
 
-    //Erase from relation editors for thread2
-    for(auto iter : relationEditor2){
-        vector<uint64_t> * editors = &iter.second;
-        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
-    }
+    //Erases from the tupleContent maps
+    tupleContent1.erase(tupleContent1.begin(), tupleContent1.lower_bound(bound));
+    tupleContent2.erase(tupleContent2.begin(), tupleContent2.lower_bound(bound));
+    tupleContent3.erase(tupleContent3.begin(), tupleContent3.lower_bound(bound));
+    tupleContent4.erase(tupleContent4.begin(), tupleContent4.lower_bound(bound));
 
-    //Erase from relation editors for thread3
-    for(auto iter : relationEditor3){
-        vector<uint64_t> * editors = &iter.second;
-        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
-    }
-
-    //Erase from relation editors for thread4
-    for(auto iter : relationEditor4){
-        vector<uint64_t> * editors = &iter.second;
-        editors->erase(editors->begin(), lower_bound(editors->begin(), editors->end(), f.transactionId));
-    }
 }
 //---------------------------------------------------------------------------
 // Read the message body and cast it to the desired type
@@ -427,15 +464,39 @@ template<typename Type> static const Type& readBody(istream& in,vector<char>& bu
     return *reinterpret_cast<const Type*>(buffer.data());
 }
 //---------------------------------------------------------------------------
-//Function that handle behavior of thread1
+//Given an iterator to a Tuple object and a vector of Column, tells if match
+inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column> * columns){
+    bool match = true;
+    for (auto c=columns->begin(); c!=columns->end(); ++c) {
+        uint64_t tupleValue = tupleValues[c->column];
+        uint64_t queryValue = c->value;
+
+        bool result=false;
+        switch (c->op) {
+            case Query::Column::Equal: result=(tupleValue==queryValue); break;
+            case Query::Column::NotEqual: result=(tupleValue!=queryValue); break;
+            case Query::Column::Less: result=(tupleValue<queryValue); break;
+            case Query::Column::LessOrEqual: result=(tupleValue<=queryValue); break;
+            case Query::Column::Greater: result=(tupleValue>queryValue); break;
+            case Query::Column::GreaterOrEqual: result=(tupleValue>=queryValue); break;
+        }
+        if (!result) {
+            match = false;
+            break;
+        }
+    }
+    return match;
+}
+//---------------------------------------------------------------------------
+//Function that handle behavior of aux threads
 void *launchThread(void *ptr){
     //Retrieves the id of the thread
     int threadId = *((int*) ptr);
 
     //Defines aliases for variables according to threadId
     vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcess = NULL;
-    map<uint32_t, vector<uint64_t>> * relationEditor = NULL;
-    map<uint64_t,vector<pair<uint32_t,vector<uint64_t>>>> * transactionHistory = NULL;
+    map<Tuple, vector<uint64_t>> * tupleContentPtr = NULL;
+    map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr = NULL;
     pthread_cond_t * cond = NULL;
     pthread_mutex_t * mut = NULL;
     bool * endThread = NULL;
@@ -443,37 +504,40 @@ void *launchThread(void *ptr){
     switch(threadId){
         case 1:
             queriesToProcess = &queriesToProcess1;
-            relationEditor = &relationEditor1;
-            transactionHistory = &transactionHistory1;
+            tupleContentPtr = &tupleContent1;
+            transactionHistoryPtr = &transactionHistory1;
             cond = &cond1;
             mut = &mut1;
             endThread = &endThread1;
             break;
         case 2:
             queriesToProcess = &queriesToProcess2;
-            relationEditor = &relationEditor2;
-            transactionHistory = &transactionHistory2;
+            tupleContentPtr = &tupleContent2;
+            transactionHistoryPtr = &transactionHistory2;
             cond = &cond2;
             mut = &mut2;
             endThread = &endThread2;
             break;
         case 3:
             queriesToProcess = &queriesToProcess3;
-            relationEditor = &relationEditor3;
-            transactionHistory = &transactionHistory3;
+            tupleContentPtr = &tupleContent3;
+            transactionHistoryPtr = &transactionHistory3;
             cond = &cond3;
             mut = &mut3;
             endThread = &endThread3;
             break;
         case 4:
             queriesToProcess = &queriesToProcess4;
-            relationEditor = &relationEditor4;
-            transactionHistory = &transactionHistory4;
+            tupleContentPtr = &tupleContent4;
+            transactionHistoryPtr = &transactionHistory4;
             cond = &cond4;
             mut = &mut4;
             endThread = &endThread4;
             break;
     }
+
+    map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *transactionHistoryPtr;
+    map<Tuple, vector<uint64_t>>& tupleContent = *tupleContentPtr;
 
     //Waits for the main thread signal (first time)
     pthread_mutex_lock( mut );
@@ -485,14 +549,14 @@ void *launchThread(void *ptr){
         if(!queriesToProcess->empty()){
             //Gets the query from the list
             auto back = queriesToProcess->back();
-            ValidationQueries v = move(back.first);
-            Query q = move(back.second.first);
-            vector<Query::Column> columns = move(back.second.second);
+            ValidationQueries * v = &(back.first);
+            Query * q = &(back.second.first);
+            vector<Query::Column> * columns = &(back.second.second);
 
             //Retrieves current result
             pthread_mutex_lock( &mutexQueryResults );
-            if(!queryResults.count(v.validationId)) queryResults[v.validationId]=false;
-            bool currentResult = queryResults[v.validationId]==true;
+            if(!queryResults.count(v->validationId)) queryResults[v->validationId]=false;
+            bool currentResult = queryResults[v->validationId]==true;
             pthread_mutex_unlock( &mutexQueryResults );
 
             //Handles query only if current result is false
@@ -502,47 +566,103 @@ void *launchThread(void *ptr){
                  * Thread query handle begins
                  */
 
-                bool conflict=false;
+                register bool foundSomeone = false;
 
-                auto * vector = &((*relationEditor)[q.relationId]);
-                auto from = lower_bound(vector->begin(), vector->end(), v.from);
-                auto to = lower_bound(vector->begin(), vector->end(), v.to+1);
-
-                //Loops through the transactions
-                for (auto iter=from; iter!=to; ++iter) {
-                    for (auto& op: (*transactionHistory)[(*iter)]) {
-                        // Check if the relation is the same
-                        if (op.first!=q.relationId)
-                        continue;
-
-                        // Check if all predicates are satisfied
-                        auto& tuple=op.second;
-                        bool match=true;
-                        for (Query::Column c: columns) {
-                            uint64_t tupleValue=tuple[c.column],queryValue=c.value;
-                            bool result=false;
-                            switch (c.op) {
-                                case Query::Column::Equal: result=(tupleValue==queryValue); break;
-                                case Query::Column::NotEqual: result=(tupleValue!=queryValue); break;
-                                case Query::Column::Less: result=(tupleValue<queryValue); break;
-                                case Query::Column::LessOrEqual: result=(tupleValue<=queryValue); break;
-                                case Query::Column::Greater: result=(tupleValue>queryValue); break;
-                                case Query::Column::GreaterOrEqual: result=(tupleValue>=queryValue); break;
-                            }
-                            if (!result) { match=false; break; }
-                        }
-                        if (match) {
-                            conflict=true;
+                //If there is no column (shouldn't happen often)
+                if(q->columnCount==0){
+                    UniqueColumn uCol{q->relationId, 0};
+                    //Query conflicts if there is at least one transaction affecting the relation
+                    bool found = false;
+                    Tuple tFrom{v->from, 0};
+                    for(auto iter: transactionHistory[uCol]){
+                        auto lowerBound = lower_bound(iter.second.begin(), iter.second.end(), tFrom);
+                        if(lowerBound!=iter.second.end() && (*lowerBound).transactionId<=v->to){
+                            found=true;
                             break;
                         }
                     }
-                    if(conflict) break;
+                    if(found){
+                        pthread_mutex_lock( &mutexQueryResults );
+                        queryResults[v->validationId]=true;
+                        pthread_mutex_unlock( &mutexQueryResults );
+                    }
+                    //Remove query
+                    queriesToProcess->pop_back();
+                    continue;
                 }
 
+                //Looks for the "right" predicate to use first
+                Query::Column * filterPredic = &((*columns)[0]); //TODO change that
+                for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
+                    if(pIter->op==Query::Column::Equal){
+                        filterPredic = &(*pIter);
+                        break;
+                    }
+                    if(pIter->op!=Query::Column::NotEqual){
+                        filterPredic = &(*pIter);
+                    }
+                }
+
+                //Checks the matching candidates for first predicate
+
+                UniqueColumn firstUCol{q->relationId, filterPredic->column};
+                Tuple tFrom{v->from, 0};
+                Tuple tTo{v->to+1, 0};
+
+                //The most common case is equal
+                if(filterPredic->op==Query::Column::Equal){
+                    auto& tupleList = transactionHistory[firstUCol][filterPredic->value];
+                    auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
+                    auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
+                    //Loops through tuples and adds them to the candidates
+                    for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
+                        auto& tupleValues = tupleContent[*iter];
+                        if(tupleMatch(tupleValues, columns)==true){
+                            foundSomeone = true;
+                            break;
+                        }
+                    }
+                //The other cases are more difficult
+                }else{
+                    //We will iterate in the relevant values
+                    const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
+                    auto tupleListStart = transactionHistory[firstUCol].begin();
+                    auto tupleListEnd = transactionHistory[firstUCol].end();
+
+                    if(filterPredic->op==Query::Column::Greater){
+                        tupleListStart = transactionHistory[firstUCol].lower_bound(filterPredic->value+1);
+                    }else if(filterPredic->op==Query::Column::GreaterOrEqual){
+                        tupleListStart = transactionHistory[firstUCol].lower_bound(filterPredic->value);
+                    }else if(filterPredic->op==Query::Column::Less){
+                        tupleListEnd = transactionHistory[firstUCol].lower_bound(filterPredic->value);
+                    }else if(filterPredic->op==Query::Column::LessOrEqual){
+                        tupleListEnd = transactionHistory[firstUCol].lower_bound(filterPredic->value+1);
+                    }
+
+                    //Iterates through the values
+                    for(auto iter=tupleListStart; iter!=tupleListEnd && !foundSomeone; ++iter){
+                        //The not equal special case
+                        if(notEqualCase && iter->first==filterPredic->value) continue;
+
+                        auto& tupleList = transactionHistory[firstUCol][iter->first];
+                        auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
+                        auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
+                        //Loops through tuples and adds them to the candidates
+                        for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
+                            auto& tupleValues = tupleContent[*iter2];
+                            if(tupleMatch(tupleValues, columns)==true){
+                                foundSomeone = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+
                 //Updates result
-                if(conflict){
+                if(foundSomeone){
                     pthread_mutex_lock( &mutexQueryResults );
-                    queryResults[v.validationId]=true;
+                    queryResults[v->validationId]=true;
                     pthread_mutex_unlock( &mutexQueryResults );
                 }
 
