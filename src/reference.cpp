@@ -179,9 +179,6 @@ static vector<uint32_t> schema;
 //Stores the content of the relations (i.e. tuples) + mutex
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
-//Maps one relation to one thread
-static vector<AuxThread> assignedThreads;
-
 //Maps tuples to their content
 static map<Tuple, vector<uint64_t>>
     tupleContent1, tupleContent2, tupleContent3, tupleContent4;
@@ -199,8 +196,8 @@ static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>
     queriesToProcess1, queriesToProcess2, queriesToProcess3, queriesToProcess4;
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
-inline static AuxThread assignedThread(uint32_t relationId){
-    return assignedThreads[relationId]; //TODO return relationId%4 ???
+inline static uint32_t assignedThread(uint32_t relationId){
+    return relationId & 3; // <=> relationId % 4
 }
 //---------------------------------------------------------------------------
 static void processDefineSchema(const DefineSchema& d)
@@ -213,15 +210,6 @@ static void processDefineSchema(const DefineSchema& d)
     //Resizes relation vector
     relations.clear();
     relations.resize(d.relationCount);
-
-    //Maps relations with threads
-    assignedThreads.resize(d.relationCount);
-    for(uint32_t i=0; i<d.relationCount; ++i){
-        if(i<d.relationCount/4) assignedThreads[i]=Thread1;
-        else if(i<d.relationCount/2) assignedThreads[i]=Thread2;
-        else if(i<3*d.relationCount/4) assignedThreads[i]=Thread3;
-        else assignedThreads[i]=Thread4;
-    }
 }
 //---------------------------------------------------------------------------
 static void processTransaction(const Transaction& t)
@@ -235,19 +223,19 @@ static void processTransaction(const Transaction& t)
         const TransactionOperationDelete* o= (const TransactionOperationDelete*) reader;
 
         //Switch according to the thread assigned
-        AuxThread thread = assignedThread(o->relationId);
+        uint32_t thread = assignedThread(o->relationId);
         map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistory = NULL;
         map<Tuple, vector<uint64_t>> * tupleContent = NULL;
         switch(thread){
-            case Thread1:
+            case 0:
                 transactionHistory = &transactionHistory1;
                 tupleContent = &tupleContent1;
                 break;
-            case Thread2:
+            case 1:
                 transactionHistory = &transactionHistory2;
                 tupleContent = &tupleContent2;
                 break;
-            case Thread3:
+            case 2:
                 transactionHistory = &transactionHistory3;
                 tupleContent = &tupleContent3;
                 break;
@@ -282,19 +270,19 @@ static void processTransaction(const Transaction& t)
         const TransactionOperationInsert* o= (const TransactionOperationInsert*) reader;
 
         //Switch according to the thread assigned
-        AuxThread thread = assignedThread(o->relationId);
+        uint32_t thread = assignedThread(o->relationId);
         map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistory = NULL;
         map<Tuple, vector<uint64_t>> * tupleContent = NULL;
         switch(thread){
-            case Thread1:
+            case 0:
                 transactionHistory = &transactionHistory1;
                 tupleContent = &tupleContent1;
                 break;
-            case Thread2:
+            case 1:
                 transactionHistory = &transactionHistory2;
                 tupleContent = &tupleContent2;
                 break;
-            case Thread3:
+            case 2:
                 transactionHistory = &transactionHistory3;
                 tupleContent = &tupleContent3;
                 break;
@@ -337,13 +325,13 @@ static void processValidationQueries(const ValidationQueries& v)
 
         //Adds query to the list to process by the relevant thread
         switch(assignedThread(q.relationId)){
-            case Thread1:
+            case 0:
                 queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
-            case Thread2:
+            case 1:
                 queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
-            case Thread3:
+            case 2:
                 queriesToProcess3.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
                 break;
             default:
@@ -359,7 +347,7 @@ static void processFlush(const Flush& f)
 {
     //Instanciates four threads to process the queries
     pthread_t thread1, thread2, thread3, thread4;
-    int thread1Id = 1, thread2Id = 2, thread3Id = 3, thread4Id = 4;
+    int thread1Id = 0, thread2Id = 1, thread3Id = 2, thread4Id = 3;
     if( pthread_create( &thread1, NULL, launchThread, (void*) &thread1Id)
             || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id)
             || pthread_create( &thread3, NULL, launchThread, (void*) &thread3Id)
@@ -476,22 +464,22 @@ void *launchThread(void *ptr){
     map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr = NULL;
 
     switch(threadId){
-        case 1:
+        case 0:
             queriesToProcess = &queriesToProcess1;
             tupleContentPtr = &tupleContent1;
             transactionHistoryPtr = &transactionHistory1;
             break;
-        case 2:
+        case 1:
             queriesToProcess = &queriesToProcess2;
             tupleContentPtr = &tupleContent2;
             transactionHistoryPtr = &transactionHistory2;
             break;
-        case 3:
+        case 2:
             queriesToProcess = &queriesToProcess3;
             tupleContentPtr = &tupleContent3;
             transactionHistoryPtr = &transactionHistory3;
             break;
-        case 4:
+        case 3:
             queriesToProcess = &queriesToProcess4;
             tupleContentPtr = &tupleContent4;
             transactionHistoryPtr = &transactionHistory4;
@@ -571,16 +559,22 @@ void *launchThread(void *ptr){
                     auto& tupleList = transactionHistory[firstUCol][filterPredic->value];
                     auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
                     auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
-                    //Loops through tuples and adds them to the candidates
-                    for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
-                        auto& tupleValues = tupleContent[*iter];
-                        if(tupleMatch(tupleValues, columns)==true){
-                            foundSomeone = true;
-                            break;
+
+                    //If only one predicate
+                    if(q->columnCount==1 && tupleFrom!=tupleTo){
+                        foundSomeone = true;
+                    }else{
+                        //Else loops through tuples and checks them
+                        for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
+                            auto& tupleValues = tupleContent[*iter];
+                            if(tupleMatch(tupleValues, columns)==true){
+                                foundSomeone = true;
+                                break;
+                            }
                         }
                     }
                 //The other cases are more difficult
-                }else{
+                }else{                                
                     //We will iterate in the relevant values
                     const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
                     auto tupleListStart = transactionHistory[firstUCol].begin();
