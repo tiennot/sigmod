@@ -439,11 +439,11 @@ inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column
         bool result=false;
         switch (c->op) {
             case Query::Column::Equal: result=(tupleValue==queryValue); break;
-            case Query::Column::NotEqual: result=(tupleValue!=queryValue); break;
             case Query::Column::Less: result=(tupleValue<queryValue); break;
             case Query::Column::LessOrEqual: result=(tupleValue<=queryValue); break;
             case Query::Column::Greater: result=(tupleValue>queryValue); break;
             case Query::Column::GreaterOrEqual: result=(tupleValue>=queryValue); break;
+            case Query::Column::NotEqual: result=(tupleValue!=queryValue); break;
         }
         if (!result) {
             match = false;
