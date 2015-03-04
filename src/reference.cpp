@@ -459,8 +459,8 @@ void *launchThread(void *ptr){
                     auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
 
                     //If only one predicate
-                    if(q->columnCount==1 && tupleFrom!=tupleTo){
-                        foundSomeone = true;
+                    if(q->columnCount==1){
+                        if(tupleFrom!=tupleTo) foundSomeone = true;
                     }else{
                         //Else loops through tuples and checks them
                         for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
