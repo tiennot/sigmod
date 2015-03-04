@@ -173,6 +173,9 @@ struct UniqueColumn {
     }
 };
 
+//Number of threads
+const static uint32_t nbThreads = 4;
+
 //Stores the schema
 static vector<uint32_t> schema;
 
@@ -180,20 +183,18 @@ static vector<uint32_t> schema;
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
 //Maps tuples to their content
-static map<Tuple, vector<uint64_t>>
-    tupleContent1, tupleContent2, tupleContent3, tupleContent4;
+static map<Tuple, vector<uint64_t>> * tupleContentPtr[nbThreads];
 
 //Maps a relation's column and a value to the tuples that affected it
-static map<UniqueColumn, map<uint64_t, vector<Tuple>>>
-    transactionHistory1, transactionHistory2, transactionHistory3, transactionHistory4;
+static map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr[nbThreads];
 
 //Stores the booleans for output + mutex
 static map<uint64_t,bool> queryResults;
 pthread_mutex_t mutexQueryResults = PTHREAD_MUTEX_INITIALIZER;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each thread
-static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>
-    queriesToProcess1, queriesToProcess2, queriesToProcess3, queriesToProcess4;
+static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcessPtr[nbThreads];
+
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
 inline static uint32_t assignedThread(uint32_t relationId){
@@ -222,27 +223,8 @@ static void processTransaction(const Transaction& t)
     for (uint32_t index=0;index!=t.deleteCount;++index) {
         const TransactionOperationDelete* o= (const TransactionOperationDelete*) reader;
 
-        //Switch according to the thread assigned
+        //Gets thread assigned
         uint32_t thread = assignedThread(o->relationId);
-        map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistory = NULL;
-        map<Tuple, vector<uint64_t>> * tupleContent = NULL;
-        switch(thread){
-            case 0:
-                transactionHistory = &transactionHistory1;
-                tupleContent = &tupleContent1;
-                break;
-            case 1:
-                transactionHistory = &transactionHistory2;
-                tupleContent = &tupleContent2;
-                break;
-            case 2:
-                transactionHistory = &transactionHistory3;
-                tupleContent = &tupleContent3;
-                break;
-            default:
-                transactionHistory = &transactionHistory4;
-                tupleContent = &tupleContent4;
-        }
 
         //Loops through the tuples to delete
         for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
@@ -252,11 +234,11 @@ static void processTransaction(const Transaction& t)
                 //For each column we add the value to the history
                 for(uint32_t col=0; col!=schema[o->relationId]; ++col){
                     UniqueColumn uCol{o->relationId, col};
-                    (*transactionHistory)[uCol][tupleValues[col]].push_back(tuple);
+                    (*transactionHistoryPtr[thread])[uCol][tupleValues[col]].push_back(tuple);
 
                 }
                 //Move to tupleContent and erase
-                (*tupleContent)[tuple]=move(tupleValues);
+                (*tupleContentPtr[thread])[tuple]=move(tupleValues);
                 relations[o->relationId].erase(*key);
                 //Increments internId
                 ++tuple.internId;
@@ -269,27 +251,8 @@ static void processTransaction(const Transaction& t)
     for (uint32_t index=0;index!=t.insertCount;++index) {
         const TransactionOperationInsert* o= (const TransactionOperationInsert*) reader;
 
-        //Switch according to the thread assigned
+        //Gets thread assigned
         uint32_t thread = assignedThread(o->relationId);
-        map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistory = NULL;
-        map<Tuple, vector<uint64_t>> * tupleContent = NULL;
-        switch(thread){
-            case 0:
-                transactionHistory = &transactionHistory1;
-                tupleContent = &tupleContent1;
-                break;
-            case 1:
-                transactionHistory = &transactionHistory2;
-                tupleContent = &tupleContent2;
-                break;
-            case 2:
-                transactionHistory = &transactionHistory3;
-                tupleContent = &tupleContent3;
-                break;
-            default:
-                transactionHistory = &transactionHistory4;
-                tupleContent = &tupleContent4;
-        }
 
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
@@ -298,10 +261,10 @@ static void processTransaction(const Transaction& t)
             //For each column we add the value to the history
             for(uint32_t col=0; col!=schema[o->relationId]; ++col){
                 UniqueColumn uCol{o->relationId, col};
-                (*transactionHistory)[uCol][tupleValues[col]].push_back(tuple);
+                (*transactionHistoryPtr[thread])[uCol][tupleValues[col]].push_back(tuple);
             }
             //Adds to tupleContent and inserts
-            (*tupleContent)[tuple]= tupleValues;
+            (*tupleContentPtr[thread])[tuple]= tupleValues;
             relations[o->relationId][values[0]]=move(tupleValues);
             //Increments internId
             ++tuple.internId;
@@ -324,20 +287,9 @@ static void processValidationQueries(const ValidationQueries& v)
         }
 
         //Adds query to the list to process by the relevant thread
-        switch(assignedThread(q.relationId)){
-            case 0:
-                queriesToProcess1.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
-                break;
-            case 1:
-                queriesToProcess2.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
-                break;
-            case 2:
-                queriesToProcess3.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
-                break;
-            default:
-                queriesToProcess4.push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
-                break;
-        }
+        auto thread = assignedThread(q.relationId);
+        queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*columnCount);
     }
@@ -378,48 +330,20 @@ static void processForget(const Forget& f)
 {
     Tuple bound{f.transactionId, 0};
 
-    //Erase from transaction history of thread1
-    for(auto iter=transactionHistory1.begin(); iter!=transactionHistory1.end(); ++iter){
-        auto * secondMap = &(iter->second);
-        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
-            vector<Tuple> * tuples = &(iter2->second);
-            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+    for(uint32_t thread=0; thread!=nbThreads; ++thread){
+        //Erase from transaction history
+        auto& transactionHistory = *(transactionHistoryPtr[thread]);
+        for(auto iter=transactionHistory.begin(); iter!=transactionHistory.end(); ++iter){
+            auto * secondMap = &(iter->second);
+            for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+                vector<Tuple> * tuples = &(iter2->second);
+                tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+            }
         }
+        //Erase from tupleContent
+        auto& tupleContent = *(tupleContentPtr[thread]);
+        tupleContent.erase(tupleContent.begin(), tupleContent.lower_bound(bound));
     }
-
-    //Erase from transaction history of thread2
-    for(auto iter=transactionHistory2.begin(); iter!=transactionHistory2.end(); ++iter){
-        auto * secondMap = &(iter->second);
-        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
-            vector<Tuple> * tuples = &(iter2->second);
-            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
-        }
-    }
-
-    //Erase from transaction history of thread3
-    for(auto iter=transactionHistory3.begin(); iter!=transactionHistory3.end(); ++iter){
-        auto * secondMap = &(iter->second);
-        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
-            vector<Tuple> * tuples = &(iter2->second);
-            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
-        }
-    }
-
-    //Erase from transaction history of thread4
-    for(auto iter=transactionHistory4.begin(); iter!=transactionHistory4.end(); ++iter){
-        auto * secondMap = &(iter->second);
-        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
-            vector<Tuple> * tuples = &(iter2->second);
-            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
-        }
-    }
-
-    //Erases from the tupleContent maps
-    tupleContent1.erase(tupleContent1.begin(), tupleContent1.lower_bound(bound));
-    tupleContent2.erase(tupleContent2.begin(), tupleContent2.lower_bound(bound));
-    tupleContent3.erase(tupleContent3.begin(), tupleContent3.lower_bound(bound));
-    tupleContent4.erase(tupleContent4.begin(), tupleContent4.lower_bound(bound));
-
 }
 //---------------------------------------------------------------------------
 // Read the message body and cast it to the desired type
@@ -456,44 +380,18 @@ inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column
 //Function that handle behavior of aux threads
 void *launchThread(void *ptr){
     //Retrieves the id of the thread
-    int threadId = *((int*) ptr);
+    int thread = *((int*) ptr);
 
-    //Defines aliases for variables according to threadId
-    vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcess = NULL;
-    map<Tuple, vector<uint64_t>> * tupleContentPtr = NULL;
-    map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr = NULL;
-
-    switch(threadId){
-        case 0:
-            queriesToProcess = &queriesToProcess1;
-            tupleContentPtr = &tupleContent1;
-            transactionHistoryPtr = &transactionHistory1;
-            break;
-        case 1:
-            queriesToProcess = &queriesToProcess2;
-            tupleContentPtr = &tupleContent2;
-            transactionHistoryPtr = &transactionHistory2;
-            break;
-        case 2:
-            queriesToProcess = &queriesToProcess3;
-            tupleContentPtr = &tupleContent3;
-            transactionHistoryPtr = &transactionHistory3;
-            break;
-        case 3:
-            queriesToProcess = &queriesToProcess4;
-            tupleContentPtr = &tupleContent4;
-            transactionHistoryPtr = &transactionHistory4;
-            break;
-    }
-
-    map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *transactionHistoryPtr;
-    map<Tuple, vector<uint64_t>>& tupleContent = *tupleContentPtr;
+    //Defines aliases for variables according to thread
+    map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *(transactionHistoryPtr[thread]);
+    map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
+    vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>& queriesToProcess = *(queriesToProcessPtr[thread]);
 
     //Starts working
     while(true){
-        if(!queriesToProcess->empty()){
+        if(!queriesToProcess.empty()){
             //Gets the query from the list
-            auto back = queriesToProcess->back();
+            auto back = queriesToProcess.back();
             ValidationQueries * v = &(back.first);
             Query * q = &(back.second.first);
             vector<Query::Column> * columns = &(back.second.second);
@@ -532,7 +430,7 @@ void *launchThread(void *ptr){
                         pthread_mutex_unlock( &mutexQueryResults );
                     }
                     //Remove query
-                    queriesToProcess->pop_back();
+                    queriesToProcess.pop_back();
                     continue;
                 }
 
@@ -609,7 +507,6 @@ void *launchThread(void *ptr){
                     }
                 }
 
-
                 //Updates result
                 if(foundSomeone){
                     pthread_mutex_lock( &mutexQueryResults );
@@ -623,7 +520,7 @@ void *launchThread(void *ptr){
             }
 
             //Erase the query from the list
-            queriesToProcess->pop_back();
+            queriesToProcess.pop_back();
         }else{
             pthread_exit(EXIT_SUCCESS);
         }
@@ -634,6 +531,13 @@ void *launchThread(void *ptr){
 //---------------------------------------------------------------------------
 int main()
 {
+    //Allocates maps
+    for(uint32_t thread=0; thread!=nbThreads; ++thread){
+        transactionHistoryPtr[thread] = new map<UniqueColumn, map<uint64_t, vector<Tuple>>>;
+        tupleContentPtr[thread] = new map<Tuple, vector<uint64_t>>;
+        queriesToProcessPtr[thread] = new vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>;
+    }
+
     vector<char> message;
     while (true) {
         // Retrieve the message
@@ -663,6 +567,13 @@ int main()
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
+
+                //Desallocates
+                for(uint32_t thread=0; thread!=nbThreads; ++thread){
+                    delete transactionHistoryPtr[thread];
+                    delete tupleContentPtr[thread];
+                    delete queriesToProcessPtr[thread];
+                }
                 return 0;
             default:
                 // crude error handling, should never happen
