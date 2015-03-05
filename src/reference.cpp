@@ -505,8 +505,9 @@ void *launchThread(void *ptr){
                             }
                         }
                     }
+                }
                 //The other cases are more difficult
-                }else{                                
+                else{
                     //We will iterate in the relevant values
                     const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
                     auto tupleListStart = transactionHistory[firstUCol].begin();
