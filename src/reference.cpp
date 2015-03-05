@@ -34,12 +34,14 @@
 #include <set>
 #include <cassert>
 #include <cstdint>
-#include <pthread.h>
+#include <functional>
+#include <thread>
+#include <mutex>
 using namespace std;
 //---------------------------------------------------------------------------
 
 //Declaration for launchThread
-void *launchThread(void *ptr);
+void launchThread(uint32_t thread);
 
 //---------------------------------------------------------------------------
 // Wire protocol messages
@@ -183,7 +185,7 @@ const static uint32_t nbThreads = 4;
 //Stores the schema
 static vector<uint32_t> schema;
 
-//Stores the content of the relations (i.e. tuples) + mutex
+//Stores the content of the relations (i.e. tuples)
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
 //Maps tuples to their content
@@ -194,7 +196,7 @@ static map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr[n
 
 //Stores the booleans for output + mutex
 static map<uint64_t,bool> queryResults;
-pthread_mutex_t mutexQueryResults = PTHREAD_MUTEX_INITIALIZER;
+mutex mutexQueryResults;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each thread
 static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcessPtr[nbThreads];
@@ -361,29 +363,25 @@ static void processValidationQueries(const ValidationQueries& v)
 static void processFlush(const Flush& f)
 {
     //Instanciates four threads to process the queries
-    pthread_t thread1, thread2, thread3, thread4;
-    int thread1Id = 0, thread2Id = 1, thread3Id = 2, thread4Id = 3;
-    if( pthread_create( &thread1, NULL, launchThread, (void*) &thread1Id)
-            || pthread_create( &thread2, NULL, launchThread, (void*) &thread2Id)
-            || pthread_create( &thread3, NULL, launchThread, (void*) &thread3Id)
-            || pthread_create( &thread4, NULL, launchThread, (void*) &thread4Id)) {
-        exit(EXIT_FAILURE);
-    }
+    thread thread1(launchThread, 0);
+    thread thread2(launchThread, 1);
+    thread thread3(launchThread, 2);
+    thread thread4(launchThread, 3);
 
     //Waits for the four threads to end
-    pthread_join(thread1, NULL);
-    pthread_join(thread2, NULL);
-    pthread_join(thread3, NULL);
-    pthread_join(thread4, NULL);
+    thread1.join();
+    thread2.join();
+    thread3.join();
+    thread4.join();
 
     //Outputs all the queryResults available
-    pthread_mutex_lock( &mutexQueryResults );
+    mutexQueryResults.lock();
     while ((!queryResults.empty())&&((*queryResults.begin()).first<=f.validationId)) {
         char c='0'+(*queryResults.begin()).second;
         cout.write(&c,1);
         queryResults.erase(queryResults.begin());
     }
-    pthread_mutex_unlock( &mutexQueryResults );
+    mutexQueryResults.unlock();
 
     //Flush output
     cout.flush();
@@ -441,10 +439,7 @@ inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column
 }
 //---------------------------------------------------------------------------
 //Function that handle behavior of aux threads
-void *launchThread(void *ptr){
-    //Retrieves the id of the thread
-    int thread = *((int*) ptr);
-
+void launchThread(uint32_t thread){
     //Defines aliases for variables according to thread
     map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *(transactionHistoryPtr[thread]);
     map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
@@ -460,10 +455,10 @@ void *launchThread(void *ptr){
             vector<Query::Column> * columns = &(back.second.second);
 
             //Retrieves current result
-            pthread_mutex_lock( &mutexQueryResults );
+            mutexQueryResults.lock();
             if(!queryResults.count(v->validationId)) queryResults[v->validationId]=false;
             bool currentResult = queryResults[v->validationId]==true;
-            pthread_mutex_unlock( &mutexQueryResults );
+            mutexQueryResults.unlock();
 
             //Handles query only if current result is false
             if(!currentResult){
@@ -488,9 +483,9 @@ void *launchThread(void *ptr){
                         }
                     }
                     if(found){
-                        pthread_mutex_lock( &mutexQueryResults );
+                        mutexQueryResults.lock();
                         queryResults[v->validationId]=true;
-                        pthread_mutex_unlock( &mutexQueryResults );
+                        mutexQueryResults.unlock();
                     }
                     //Remove query
                     queriesToProcess.pop_back();
@@ -603,9 +598,9 @@ void *launchThread(void *ptr){
 
                 //Updates result
                 if(foundSomeone){
-                    pthread_mutex_lock( &mutexQueryResults );
+                    mutexQueryResults.lock();
                     queryResults[v->validationId]=true;
-                    pthread_mutex_unlock( &mutexQueryResults );
+                    mutexQueryResults.unlock();
                 }
 
                 /*
@@ -619,8 +614,7 @@ void *launchThread(void *ptr){
             pthread_exit(EXIT_SUCCESS);
         }
     }
-    //Should never get there
-    return NULL;
+    //Should never reach the end
 }
 //---------------------------------------------------------------------------
 int main()
