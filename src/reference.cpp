@@ -286,13 +286,72 @@ static void processValidationQueries(const ValidationQueries& v)
         //Build vector of columns
         vector<Query::Column> vColumns;
         uint32_t columnCount = q.columnCount;
+        uint32_t nbPredicPerCol[schema[q.relationId]] = {0};
         for (auto c=q.columns,cLimit=c+columnCount;c!=cLimit;++c){
+            ++nbPredicPerCol[c->column];
             vColumns.push_back(*c);
         }
 
+        //Prevents "useless" queries from being added to the processing queue
+        bool notToBePushed = false;
+        for(uint32_t i=0; i<schema[q.relationId]; ++i){
+            if(nbPredicPerCol[i]>1){
+                const Query::Column::Op * op = NULL;
+                uint64_t value = 0;
+                if(op!=NULL || value!=0) cerr << "hello";
+                for (auto c=q.columns,cLimit=c+columnCount;c!=cLimit;++c){
+                    if(c->column != i) continue;
+                    if(op==NULL){
+                        op = &(c->op);
+                        value = c->value;
+                    }else{
+                        auto op2 = c->op;
+                        switch(*op){
+                            case Query::Column::Equal:
+                                if(op2==Query::Column::Equal) notToBePushed = c->value!=value;
+                                else if(op2==Query::Column::Greater) notToBePushed = c->value>=value;
+                                else if(op2==Query::Column::GreaterOrEqual) notToBePushed = c->value>value;
+                                else if(op2==Query::Column::Less) notToBePushed = c->value<=value;
+                                else if(op2==Query::Column::LessOrEqual) notToBePushed = c->value<value;
+                                else if(op2==Query::Column::NotEqual) notToBePushed = c->value==value;
+                                break;
+                            case Query::Column::Greater:
+                                if(op2==Query::Column::Equal) notToBePushed = c->value<=value;
+                                else if(op2==Query::Column::Less) notToBePushed = c->value<=value;
+                                else if(op2==Query::Column::LessOrEqual) notToBePushed = c->value<=value;
+                                break;
+                            case Query::Column::GreaterOrEqual:
+                                if(op2==Query::Column::Equal) notToBePushed = c->value<value;
+                                else if(op2==Query::Column::Less) notToBePushed = c->value<=value;
+                                else if(op2==Query::Column::LessOrEqual) notToBePushed = c->value<value;
+                                break;
+                            case Query::Column::Less:
+                                if(op2==Query::Column::Equal) notToBePushed = c->value>=value;
+                                else if(op2==Query::Column::Greater) notToBePushed = c->value>=value;
+                                else if(op2==Query::Column::GreaterOrEqual) notToBePushed = c->value>=value;
+                                break;
+                            case Query::Column::LessOrEqual:
+                                if(op2==Query::Column::Equal) notToBePushed = c->value>value;
+                                else if(op2==Query::Column::Greater) notToBePushed = c->value>=value;
+                                else if(op2==Query::Column::GreaterOrEqual) notToBePushed = c->value>value;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    if(notToBePushed) break;
+                }
+                if(notToBePushed) break;
+            }
+        }
+
         //Adds query to the list to process by the relevant thread
-        auto thread = assignedThread(q.relationId);
-        queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+        if(!notToBePushed){
+            auto thread = assignedThread(q.relationId);
+            queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+        }else{
+            queryResults[v.validationId] = false;
+        }
 
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*columnCount);
