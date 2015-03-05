@@ -151,6 +151,10 @@ struct Tuple {
         return transactionId==tuple.transactionId && internId==tuple.internId;
     }
 
+    bool operator!=(const Tuple& tuple) const{
+        return transactionId!=tuple.transactionId || internId!=tuple.internId;
+    }
+
     friend ostream &operator<<(ostream &out, Tuple tuple){
         out << "Tuple{TransId=" << tuple.transactionId;
         out << " InternId=" << tuple.internId << "}";
@@ -435,16 +439,23 @@ void *launchThread(void *ptr){
                 }
 
                 //Looks for the "right" predicate to use first
-                Query::Column * filterPredic = &((*columns)[0]); //TODO change that
+                Query::Column * filterPredic = NULL, * filterPredic2 = NULL;
+                bool predic1IsEqual = false;
                 for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
                     if(pIter->op==Query::Column::Equal){
-                        filterPredic = &(*pIter);
-                        break;
+                        if(!predic1IsEqual){
+                            filterPredic = &(*pIter);
+                            predic1IsEqual = true;
+                        }else{
+                            filterPredic2 = &(*pIter);
+                            break;
+                        }
                     }
-                    if(pIter->op!=Query::Column::NotEqual){
+                    if(!predic1IsEqual && pIter->op!=Query::Column::NotEqual){
                         filterPredic = &(*pIter);
                     }
                 }
+                if(filterPredic==NULL) filterPredic = &((*columns)[0]);
 
                 //Checks the matching candidates for first predicate
 
@@ -462,12 +473,35 @@ void *launchThread(void *ptr){
                     if(q->columnCount==1){
                         if(tupleFrom!=tupleTo) foundSomeone = true;
                     }else{
-                        //Else loops through tuples and checks them
-                        for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
-                            auto& tupleValues = tupleContent[*iter];
-                            if(tupleMatch(tupleValues, columns)==true){
-                                foundSomeone = true;
-                                break;
+                        //Else loops through tuples if only one equal filter
+                        if(filterPredic2==NULL){
+                            for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
+                                auto& tupleValues = tupleContent[*iter];
+                                if(tupleMatch(tupleValues, columns)==true){
+                                    foundSomeone = true;
+                                    break;
+                                }
+                            }
+                        //If two equal filters a little bit tricky
+                        }else{
+                            //Creates the same variables for the second one
+                            UniqueColumn firstUCol2{q->relationId, filterPredic2->column};
+                            auto& tupleList2 = transactionHistory[firstUCol2][filterPredic2->value];
+                            auto tupleFrom2 = lower_bound(tupleList2.begin(), tupleList2.end(), tFrom);
+                            auto tupleTo2 = lower_bound(tupleFrom2, tupleList2.end(), tTo);
+                            //We do the same as above but with two iterators simultaneously
+                            for(auto iter=tupleFrom, iter2=tupleFrom2; iter!=tupleTo && iter2!=tupleTo2;){
+                                //Adjusts the iterators
+                                if(*iter2 != *iter){
+                                    *iter2 < *iter ? ++iter2 : ++iter;
+                                    continue;
+                                }
+                                auto& tupleValues = tupleContent[*iter];
+                                if(tupleMatch(tupleValues, columns)==true){
+                                    foundSomeone = true;
+                                    break;
+                                }
+                                ++iter; ++iter2;
                             }
                         }
                     }
@@ -564,6 +598,7 @@ int main()
                 processForget(readBody<Forget>(cin,message,head.messageLen));
                 break;
             case MessageHead::DefineSchema:
+                //cerr << "Pause... "; sleep(15); cerr << "Resumes..." << endl;
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
