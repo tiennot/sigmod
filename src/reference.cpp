@@ -362,17 +362,17 @@ static void processValidationQueries(const ValidationQueries& v)
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
 {
-    //Instanciates four threads to process the queries
-    thread thread1(launchThread, 0);
-    thread thread2(launchThread, 1);
-    thread thread3(launchThread, 2);
-    thread thread4(launchThread, 3);
+    //Instanciates threads in the pool
+    vector<thread> threadPool;
+    for(uint32_t i=0; i!=nbThreads; ++i){
+        threadPool.push_back(thread(launchThread, i));
+    }
 
-    //Waits for the four threads to end
-    thread1.join();
-    thread2.join();
-    thread3.join();
-    thread4.join();
+    //Waits for the threads to end
+    while(!threadPool.empty()){
+        threadPool.back().join();
+        threadPool.pop_back();
+    }
 
     //Outputs all the queryResults available
     mutexQueryResults.lock();
