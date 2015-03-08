@@ -298,7 +298,6 @@ static void processValidationQueries(const ValidationQueries& v)
             if(nbPredicPerCol[i]>1){
                 const Query::Column::Op * op = NULL;
                 uint64_t value = 0;
-                if(op!=NULL || value!=0) cerr << "hello";
                 for (auto c=q.columns,cLimit=c+columnCount;c!=cLimit;++c){
                     if(c->column != i) continue;
                     if(op==NULL){
@@ -360,7 +359,6 @@ static void processValidationQueries(const ValidationQueries& v)
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
 {
-    cerr << "Flush " << f.validationId << endl;
     //Instanciates threads in the pool
     vector<thread> threadPool;
     for(uint32_t i=0; i!=nbThreads; ++i){
@@ -495,11 +493,12 @@ void launchThread(uint32_t thread){
                 }
 
                 //Looks for the "right" strategy to test the tuples
-                vector<Query::Column> eCol; //Vector containing the equal columns
+                vector<Query::Column*> eCol; //Vector containing the equal columns
+                eCol.reserve(q->columnCount);
 
                 for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
                     if(pIter->op==Query::Column::Equal){
-                        eCol.push_back(*pIter);
+                        eCol.push_back(&(*pIter));
                     }
                 }
 
@@ -508,27 +507,43 @@ void launchThread(uint32_t thread){
 
                 //The most common case is when there is at least one equal column
                 if(!eCol.empty()){
+                    //The case of 1 predic, ==
+                    if(q->columnCount==1){
+                        auto filterPredic = &((*columns)[0]);
+                        UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
+                        auto& tupleList = transactionHistory[firstUCol][filterPredic->value];
+                        auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
+                        auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
+                        if(tupleFrom!=tupleTo){
+                            mutexQueryResults.lock();
+                            queryResults[v->validationId]=true;
+                            mutexQueryResults.unlock();
+                        }
+                        //Remove query
+                        queriesToProcess.pop_back();
+                        continue;
+                    }
+
                     uint32_t eColNb = eCol.size();
                     vector<Tuple>::iterator tupleFrom[eColNb];
                     vector<Tuple>::iterator tupleTo[eColNb];
 
                     bool foundEmptyList = false;
                     for(uint32_t i=0; i!=eColNb; ++i){
-                        UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i].column};
-                        auto tupleList = &(transactionHistory[firstUCol][eCol[i].value]);
-                        if(tupleList->empty()){
+                        UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i]->column};
+                        auto tupleList = &(transactionHistory[firstUCol][eCol[i]->value]);
+                        tupleFrom[i] = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
+                        tupleTo[i] = lower_bound(tupleFrom[i], tupleList->end(), tTo);
+                        if(tupleFrom[i]==tupleTo[i]){
                             foundEmptyList = true;
                             break;
                         }
-                        tupleFrom[i] = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
-                        tupleTo[i] = lower_bound(tupleFrom[i], tupleList->end(), tTo);
                     }
 
                     if(foundEmptyList){
                         queriesToProcess.pop_back();
                         continue;
                     }
-                    if(foundEmptyList) cerr << "Ce nest pas normal!!!!" << endl;
 
                     vector<Tuple>::iterator iter[eColNb];
                     //Initializes the iterators
@@ -538,41 +553,55 @@ void launchThread(uint32_t thread){
 
                     //Goes through the iterators
                     bool endWhile = false;
-
                     while(true){
-                        //Test //TODO: Remove if possible
-                        for(uint32_t i=0; i!=eColNb; ++i){
-                            if(iter[i]==tupleTo[i]) endWhile = true;
-                        }
-                        if(endWhile) break;
-
                         //Adjusts the iterators
                         bool continueWhile = false;
                         for(uint32_t i=1; i!=eColNb; ++i){
                             if(*(iter[0]) != *(iter[i])){
-                                *(iter[i]) < *(iter[0]) ? ++iter[i] : ++iter[0];
+                                if(*(iter[i]) < *(iter[0])){
+                                    ++iter[i];
+                                    if(iter[i]==tupleTo[i]) endWhile = true;
+                                }else{
+                                    ++iter[0];
+                                    if(iter[0]==tupleTo[0]) endWhile = true;
+                                }
                                 continueWhile=true;
                                 break;
                             }
                         }
+                        if(endWhile) break;
                         if(continueWhile) continue;
 
                         //Proceeds test
-                        auto& tupleValues = tupleContent.at(*(iter[0]));
+                        auto& tupleValues = tupleContent[*(iter[0])];
                         if(tupleMatch(tupleValues, columns)==true){
                             foundSomeone = true;
                             break;
                         }
+
                         //Increments iterators
                         for(uint32_t i=0; i!=eColNb; ++i){
                             ++iter[i];
+                            if(iter[i]==tupleTo[i]){
+                                endWhile = true;
+                                break;
+                            }
                         }
+                        if(endWhile) break;
                     }
                 }
                 //The other cases are more difficult
                 else{
                     //We will iterate in the relevant values
-                    Query::Column * filterPredic = &((*columns)[0]);
+                    Query::Column * filterPredic = NULL;
+                    for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
+                        if(pIter->op!=Query::Column::NotEqual){
+                            filterPredic = &(*pIter);
+                            break;
+                        }
+                    }
+                    if(filterPredic==NULL) filterPredic = &((*columns)[0]);
+
                     UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
 
                     const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
