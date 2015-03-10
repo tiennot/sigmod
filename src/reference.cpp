@@ -609,13 +609,13 @@ void launchThread(uint32_t thread){
                     auto tupleListEnd = transactionHistory[firstUCol].end();
 
                     if(filterPredic->op==Query::Column::Greater){
-                        tupleListStart = transactionHistory[firstUCol].lower_bound(filterPredic->value+1);
+                        tupleListStart = transactionHistory[firstUCol].upper_bound(filterPredic->value);
                     }else if(filterPredic->op==Query::Column::GreaterOrEqual){
                         tupleListStart = transactionHistory[firstUCol].lower_bound(filterPredic->value);
                     }else if(filterPredic->op==Query::Column::Less){
                         tupleListEnd = transactionHistory[firstUCol].lower_bound(filterPredic->value);
                     }else if(filterPredic->op==Query::Column::LessOrEqual){
-                        tupleListEnd = transactionHistory[firstUCol].lower_bound(filterPredic->value+1);
+                        tupleListEnd = transactionHistory[firstUCol].upper_bound(filterPredic->value);
                     }
 
                     //Iterates through the values
@@ -626,7 +626,7 @@ void launchThread(uint32_t thread){
                         auto& tupleList = transactionHistory[firstUCol][iter->first];
                         auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
                         auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
-                        //Loops through tuples and adds them to the candidates
+                        //Loops through tuples and checks them
                         for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
                             auto& tupleValues = tupleContent[*iter2];
                             if(tupleMatch(tupleValues, columns)==true){
