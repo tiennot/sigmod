@@ -173,12 +173,12 @@ struct UniqueColumn {
     }
 
     bool operator==(const UniqueColumn& col) const{
-        return relationId == col.relationId && column == col.column;
+        return column == col.column && relationId == col.relationId;
     }
 };
 
 //Number of threads
-const static uint32_t nbThreads = 4;
+const static uint32_t nbThreads = 8;
 
 //Stores the schema
 static vector<uint32_t> schema;
@@ -347,7 +347,7 @@ static void processValidationQueries(const ValidationQueries& v)
         //Adds query to the list to process by the relevant thread
         if(!notToBePushed){
             auto thread = assignedThread(q.relationId);
-            queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, vColumns)));
+            queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, move(vColumns))));
         }else{
             queryResults[v.validationId] = false;
         }
