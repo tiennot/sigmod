@@ -403,22 +403,19 @@ static void processForget(const Forget& f)
 //---------------------------------------------------------------------------
 //Function that handle threads used to process forget
 void forgetThread(uint32_t thread, uint64_t transactionId){
-    Tuple bound{f.transactionId, 0};
-
-    for(uint32_t thread=0; thread!=nbThreads; ++thread){
-        //Erase from transaction history
-        auto& transactionHistory = *(transactionHistoryPtr[thread]);
-        for(auto iter=transactionHistory.begin(); iter!=transactionHistory.end(); ++iter){
-            auto * secondMap = &(iter->second);
-            for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
-                vector<Tuple> * tuples = &(iter2->second);
-                tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
-            }
+    Tuple bound{transactionId, 0};
+    //Erase from transaction history
+    auto& transactionHistory = *(transactionHistoryPtr[thread]);
+    for(auto iter=transactionHistory.begin(); iter!=transactionHistory.end(); ++iter){
+        auto * secondMap = &(iter->second);
+        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+            vector<Tuple> * tuples = &(iter2->second);
+            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
         }
-        //Erase from tupleContent
-        auto& tupleContent = *(tupleContentPtr[thread]);
-        tupleContent.erase(tupleContent.begin(), tupleContent.lower_bound(bound));
     }
+    //Erase from tupleContent
+    auto& tupleContent = *(tupleContentPtr[thread]);
+    tupleContent.erase(tupleContent.begin(), tupleContent.lower_bound(bound));
 }
 //---------------------------------------------------------------------------
 // Read the message body and cast it to the desired type
