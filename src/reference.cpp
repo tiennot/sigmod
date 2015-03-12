@@ -41,8 +41,9 @@
 using namespace std;
 //---------------------------------------------------------------------------
 
-//Declaration for launchThread
-void launchThread(uint32_t thread);
+//Declaration for thread handling functions
+void flushThread(uint32_t thread);
+void forgetThread(uint32_t thread, uint64_t transactionId);
 
 //---------------------------------------------------------------------------
 // Wire protocol messages
@@ -359,10 +360,11 @@ static void processValidationQueries(const ValidationQueries& v)
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
 {
+    cerr << "Flush " << f.validationId << endl;
     //Instanciates threads in the pool
     vector<thread> threadPool;
     for(uint32_t i=0; i!=nbThreads; ++i){
-        threadPool.push_back(thread(launchThread, i));
+        threadPool.push_back(thread(flushThread, i));
     }
 
     //Waits for the threads to end
@@ -386,6 +388,21 @@ static void processFlush(const Flush& f)
 //---------------------------------------------------------------------------
 static void processForget(const Forget& f)
 {
+    cerr << "Forget " << f.transactionId << endl;
+    //Instanciates threads in the pool
+    vector<thread> threadPool;
+    for(uint32_t i=0; i!=nbThreads; ++i){
+        threadPool.push_back(thread(forgetThread, i, f.transactionId));
+    }
+    //Waits for the threads to end
+    while(!threadPool.empty()){
+        threadPool.back().join();
+        threadPool.pop_back();
+    }
+}
+//---------------------------------------------------------------------------
+//Function that handle threads used to process forget
+void forgetThread(uint32_t thread, uint64_t transactionId){
     Tuple bound{f.transactionId, 0};
 
     for(uint32_t thread=0; thread!=nbThreads; ++thread){
@@ -436,7 +453,7 @@ inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column
 }
 //---------------------------------------------------------------------------
 //Function that handle behavior of aux threads
-void launchThread(uint32_t thread){
+void flushThread(uint32_t thread){
     //Defines aliases for variables according to thread
     map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *(transactionHistoryPtr[thread]);
     map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
