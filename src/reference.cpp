@@ -187,7 +187,7 @@ static vector<uint32_t> schema;
 //Stores the content of the relations (i.e. tuples)
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
-//Maps tuples to their content
+//Maps tuples to their content (and their relation id)
 static map<Tuple, vector<uint64_t>> * tupleContentPtr[nbThreads];
 
 //Maps a relation's column and a value to the tuples that affected it
@@ -197,8 +197,11 @@ static map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr[n
 static map<uint64_t,bool> queryResults;
 mutex mutexQueryResults;
 
-//Lists of (validationQuery, (query, columns)) to be processed by each thread
+//Lists of (validationQuery, (query, columns)) to be processed by each flush thread
 static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcessPtr[nbThreads];
+
+//Lists of tuples and their values to be indexed by each flush thread (for each relation)
+static map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> * tuplesToIndexPtr[nbThreads];
 
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
@@ -236,12 +239,8 @@ static void processTransaction(const Transaction& t)
             //If the tuple key exists in the relation
             if (relations[o->relationId].count(*key)) {
                 vector<uint64_t> tupleValues = relations[o->relationId][*key];
-                //For each column we add the value to the history
-                for(uint32_t col=0; col!=schema[o->relationId]; ++col){
-                    UniqueColumn uCol{o->relationId, col};
-                    (*transactionHistoryPtr[thread])[uCol][tupleValues[col]].push_back(tuple);
-
-                }
+                //Adds to the tuples to index
+                (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, tupleValues));
                 //Move to tupleContent and erase
                 (*tupleContentPtr[thread])[tuple]=move(tupleValues);
                 relations[o->relationId].erase(*key);
@@ -263,11 +262,8 @@ static void processTransaction(const Transaction& t)
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
             vector<uint64_t> tupleValues;
             tupleValues.insert(tupleValues.begin(),values,values+schema[o->relationId]);
-            //For each column we add the value to the history
-            for(uint32_t col=0; col!=schema[o->relationId]; ++col){
-                UniqueColumn uCol{o->relationId, col};
-                (*transactionHistoryPtr[thread])[uCol][tupleValues[col]].push_back(tuple);
-            }
+            //Adds to the tuples to index
+            (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, tupleValues));
             //Adds to tupleContent and inserts
             (*tupleContentPtr[thread])[tuple]= tupleValues;
             relations[o->relationId][values[0]]=move(tupleValues);
@@ -456,6 +452,21 @@ void flushThread(uint32_t thread){
     map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *(transactionHistoryPtr[thread]);
     map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
     vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>& queriesToProcess = *(queriesToProcessPtr[thread]);
+
+    //Index the tuple for its relations
+    UniqueColumn uColIndexing{0,0};
+    map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>& tuplesToIndex = *(tuplesToIndexPtr[thread]);
+    for(auto iter=tuplesToIndex.begin(), iterEnd=tuplesToIndex.end(); iter!=iterEnd; ++iter){
+        uColIndexing.relationId = iter->first;
+        for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End; ++iter2){
+            //For each column we add the value to the history
+            for(uint32_t col=0, nbCol=iter2->second.size(); col!=nbCol; ++col){
+                uColIndexing.column = col;
+                transactionHistory[uColIndexing][iter2->second[col]].push_back(iter2->first);
+            }
+        }
+        iter->second.clear();
+    }
 
     //Starts working
     while(!queriesToProcess.empty()){
@@ -676,6 +687,7 @@ int main()
         transactionHistoryPtr[thread] = new map<UniqueColumn, map<uint64_t, vector<Tuple>>>;
         tupleContentPtr[thread] = new map<Tuple, vector<uint64_t>>;
         queriesToProcessPtr[thread] = new vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>;
+        tuplesToIndexPtr[thread] = new map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>;
     }
 
     vector<char> message;
@@ -708,12 +720,12 @@ int main()
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
-
                 //Desallocates
                 for(uint32_t thread=0; thread!=nbThreads; ++thread){
                     delete transactionHistoryPtr[thread];
                     delete tupleContentPtr[thread];
                     delete queriesToProcessPtr[thread];
+                    delete tuplesToIndexPtr[thread];
                 }
                 return 0;
             default:
