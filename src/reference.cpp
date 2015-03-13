@@ -38,6 +38,7 @@
 #include <thread>
 #include <mutex>
 #include <unistd.h>
+#include <string.h>
 using namespace std;
 //---------------------------------------------------------------------------
 
@@ -238,7 +239,7 @@ static void processTransaction(const Transaction& t)
         for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
             //If the tuple key exists in the relation
             if (relations[o->relationId].count(*key)) {
-                vector<uint64_t> tupleValues = relations[o->relationId][*key];
+                vector<uint64_t>& tupleValues = relations[o->relationId][*key];
                 //Adds to the tuples to index
                 (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, tupleValues));
                 //Move to tupleContent and erase
@@ -280,13 +281,10 @@ static void processValidationQueries(const ValidationQueries& v)
     for (unsigned index=0;index!=v.queryCount;++index) {
         auto& q=*reinterpret_cast<const Query*>(reader);
 
-        //Build vector of columns
-        vector<Query::Column> vColumns;
-        uint32_t columnCount = q.columnCount;
+        //Counts predicates
         uint32_t nbPredicPerCol[schema[q.relationId]] = {0};
-        for (auto c=q.columns,cLimit=c+columnCount;c!=cLimit;++c){
+        for (auto c=q.columns,cLimit=c+q.columnCount;c!=cLimit;++c){
             ++nbPredicPerCol[c->column];
-            vColumns.push_back(*c);
         }
 
         //Prevents "useless" queries from being added to the processing queue
@@ -295,7 +293,7 @@ static void processValidationQueries(const ValidationQueries& v)
             if(nbPredicPerCol[i]>1){
                 const Query::Column::Op * op = NULL;
                 uint64_t value = 0;
-                for (auto c=q.columns,cLimit=c+columnCount;c!=cLimit;++c){
+                for (auto c=q.columns,cLimit=c+q.columnCount;c!=cLimit;++c){
                     if(c->column != i) continue;
                     if(op==NULL){
                         op = &(c->op);
@@ -343,6 +341,11 @@ static void processValidationQueries(const ValidationQueries& v)
 
         //Adds query to the list to process by the relevant thread
         if(!notToBePushed){
+            //Build vector of columns
+            vector<Query::Column> vColumns;
+            vColumns.resize(q.columnCount);
+            memmove(vColumns.data(), &(q.columns), (sizeof(Query::Column)*q.columnCount));
+            //Push
             auto thread = assignedThread(q.relationId);
             queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, move(vColumns))));
         }else{
@@ -350,7 +353,7 @@ static void processValidationQueries(const ValidationQueries& v)
         }
 
         //Offsets reader
-        reader+=sizeof(Query)+(sizeof(Query::Column)*columnCount);
+        reader+=sizeof(Query)+(sizeof(Query::Column)*q.columnCount);
     }
 }
 //---------------------------------------------------------------------------
