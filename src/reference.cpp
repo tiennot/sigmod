@@ -37,6 +37,8 @@
 #include <functional>
 #include <thread>
 #include <mutex>
+#include <atomic>
+#include <condition_variable>
 #include <unistd.h>
 #include <string.h>
 using namespace std;
@@ -204,6 +206,12 @@ static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * que
 //Lists of tuples and their values to be indexed by each flush thread (for each relation)
 static map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> * tuplesToIndexPtr[nbThreads];
 
+//Stuff for synchronization
+static atomic<uint32_t> processingThreadsNb(0);
+static condition_variable_any conditionFlush;
+static mutex mutexFlush;
+static atomic<bool> referenceOver(false);
+
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
 inline static uint32_t assignedThread(uint32_t relationId){
@@ -360,17 +368,13 @@ static void processValidationQueries(const ValidationQueries& v)
 static void processFlush(const Flush& f)
 {
     cerr << "Flush " << f.validationId << endl;
-    //Instanciates threads in the pool
-    vector<thread> threadPool;
-    for(uint32_t i=0; i!=nbThreads; ++i){
-        threadPool.push_back(thread(flushThread, i));
-    }
 
-    //Waits for the threads to end
-    while(!threadPool.empty()){
-        threadPool.back().join();
-        threadPool.pop_back();
-    }
+    //Notifies the flush threads
+    while(processingThreadsNb!=nbThreads){} //Safety while, shoudn't happen
+    mutexFlush.lock();
+    conditionFlush.notify_all();
+    conditionFlush.wait(mutexFlush);
+    mutexFlush.unlock();
 
     //Outputs all the queryResults available
     mutexQueryResults.lock();
@@ -449,100 +453,75 @@ inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column
     return match;
 }
 //---------------------------------------------------------------------------
-//Function that handle behavior of aux threads
+//Function that handle behavior of flushing threads
 void flushThread(uint32_t thread){
     //Defines aliases for variables according to thread
     map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *(transactionHistoryPtr[thread]);
     map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
     vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>& queriesToProcess = *(queriesToProcessPtr[thread]);
 
-    //Index the tuple for its relations
-    UniqueColumn uColIndexing{0,0};
-    map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>& tuplesToIndex = *(tuplesToIndexPtr[thread]);
-    for(auto iter=tuplesToIndex.begin(), iterEnd=tuplesToIndex.end(); iter!=iterEnd; ++iter){
-        uColIndexing.relationId = iter->first;
-        for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End; ++iter2){
-            //For each column we add the value to the history
-            for(uint32_t col=0, nbCol=iter2->second.size(); col!=nbCol; ++col){
-                uColIndexing.column = col;
-                transactionHistory[uColIndexing][iter2->second[col]].push_back(iter2->first);
+    while(true){
+        //Waits for the signal from main thread
+        mutexFlush.lock();
+        processingThreadsNb++;
+        conditionFlush.wait(mutexFlush);
+        mutexFlush.unlock();
+
+        if(referenceOver) break;
+
+        //Index the tuple for its relations
+        UniqueColumn uColIndexing{0,0};
+        map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>& tuplesToIndex = *(tuplesToIndexPtr[thread]);
+        for(auto iter=tuplesToIndex.begin(), iterEnd=tuplesToIndex.end(); iter!=iterEnd; ++iter){
+            uColIndexing.relationId = iter->first;
+            for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End; ++iter2){
+                //For each column we add the value to the history
+                for(uint32_t col=0, nbCol=iter2->second.size(); col!=nbCol; ++col){
+                    uColIndexing.column = col;
+                    transactionHistory[uColIndexing][iter2->second[col]].push_back(iter2->first);
+                }
             }
+            iter->second.clear();
         }
-        iter->second.clear();
-    }
 
-    //Starts working
-    while(!queriesToProcess.empty()){
-        //Gets the query from the list
-        auto& back = queriesToProcess.back();
-        ValidationQueries * v = &(back.first);
+        //Starts working
+        while(!queriesToProcess.empty()){
+            //Gets the query from the list
+            auto& back = queriesToProcess.back();
+            ValidationQueries * v = &(back.first);
 
-        Query * q = &(back.second.first);
-        vector<Query::Column> * columns = &(back.second.second);
+            Query * q = &(back.second.first);
+            vector<Query::Column> * columns = &(back.second.second);
 
-        //Retrieves current result
-        mutexQueryResults.lock();
+            //Retrieves current result
+            mutexQueryResults.lock();
+            if(!queryResults.count(v->validationId)) queryResults[v->validationId]=false;
+            bool currentResult = queryResults[v->validationId]==true;
+            mutexQueryResults.unlock();
 
-        if(!queryResults.count(v->validationId)) queryResults[v->validationId]=false;
-        bool currentResult = queryResults[v->validationId]==true;
+            //Handles query only if current result is false
+            if(!currentResult){
 
-        mutexQueryResults.unlock();
+                /*
+                 * Thread query handle begins
+                 */
 
-        //Handles query only if current result is false
-        if(!currentResult){
+                register bool foundSomeone = false;
 
-            /*
-             * Thread query handle begins
-             */
-
-            register bool foundSomeone = false;
-
-            //If there is no column (shouldn't happen often)
-            if(q->columnCount==0){
-                UniqueColumn uCol{q->relationId, 0};
-                //Query conflicts if there is at least one transaction affecting the relation
-                bool found = false;
-                Tuple tFrom{v->from, 0};
-                for(auto iter: transactionHistory[uCol]){
-                    auto lowerBound = lower_bound(iter.second.begin(), iter.second.end(), tFrom);
-                    if(lowerBound!=iter.second.end() && (*lowerBound).transactionId<=v->to){
-                        found=true;
-                        break;
+                //If there is no column (shouldn't happen often)
+                if(q->columnCount==0){
+                    UniqueColumn uCol{q->relationId, 0};
+                    //Query conflicts if there is at least one transaction affecting the relation
+                    bool found = false;
+                    Tuple tFrom{v->from, 0};
+                    for(auto iter: transactionHistory[uCol]){
+                        auto lowerBound = lower_bound(iter.second.begin(), iter.second.end(), tFrom);
+                        if(lowerBound!=iter.second.end() && (*lowerBound).transactionId<=v->to){
+                            found=true;
+                            break;
+                        }
                     }
-                }
-                if(found){
-                    mutexQueryResults.lock();
-                    queryResults[v->validationId]=true;
-                    mutexQueryResults.unlock();
-                }
-                //Remove query
-                queriesToProcess.pop_back();
-                continue;
-            }
-
-            //Looks for the "right" strategy to test the tuples
-            vector<Query::Column*> eCol; //Vector containing the equal columns
-            eCol.reserve(q->columnCount);
-
-            for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
-                if(pIter->op==Query::Column::Equal){
-                    eCol.push_back(&(*pIter));
-                }
-            }
-
-            Tuple tFrom{v->from, 0};
-            Tuple tTo{v->to+1, 0};
-
-            //The most common case is when there is at least one equal column
-            if(!eCol.empty()){
-                //The case of 1 predic, ==
-                if(q->columnCount==1){
-                    auto filterPredic = &((*columns)[0]);
-                    UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
-                    auto& tupleList = transactionHistory[firstUCol][filterPredic->value];
-                    auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
-                    auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
-                    if(tupleFrom!=tupleTo){
+                    if(found){
                         mutexQueryResults.lock();
                         queryResults[v->validationId]=true;
                         mutexQueryResults.unlock();
@@ -552,134 +531,182 @@ void flushThread(uint32_t thread){
                     continue;
                 }
 
-                uint32_t eColNb = eCol.size();
-                vector<Tuple>::iterator tupleFrom[eColNb];
-                vector<Tuple>::iterator tupleTo[eColNb];
+                //Looks for the "right" strategy to test the tuples
+                vector<Query::Column*> eCol; //Vector containing the equal columns
+                eCol.reserve(q->columnCount);
 
-                bool foundEmptyList = false;
-                for(uint32_t i=0; i!=eColNb; ++i){
-                    UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i]->column};
-                    auto tupleList = &(transactionHistory[firstUCol][eCol[i]->value]);
-                    tupleFrom[i] = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
-                    tupleTo[i] = lower_bound(tupleFrom[i], tupleList->end(), tTo);
-                    if(tupleFrom[i]==tupleTo[i]){
-                        foundEmptyList = true;
-                        break;
-                    }
-                }
-
-                if(foundEmptyList){
-                    queriesToProcess.pop_back();
-                    continue;
-                }
-
-                vector<Tuple>::iterator iter[eColNb];
-                //Initializes the iterators
-                for(uint32_t i=0; i!=eColNb; ++i){
-                    iter[i] = tupleFrom[i];
-                }
-
-                //Goes through the iterators
-                bool endWhile = false;
-                while(true){
-                    //Adjusts the iterators
-                    bool continueWhile = false;
-                    for(uint32_t i=1; i!=eColNb; ++i){
-                        if(*(iter[0]) != *(iter[i])){
-                            if(*(iter[i]) < *(iter[0])){
-                                ++iter[i];
-                                if(iter[i]==tupleTo[i]) endWhile = true;
-                            }else{
-                                ++iter[0];
-                                if(iter[0]==tupleTo[0]) endWhile = true;
-                            }
-                            continueWhile=true;
-                            break;
-                        }
-                    }
-                    if(endWhile) break;
-                    if(continueWhile) continue;
-
-                    //Proceeds test
-                    auto& tupleValues = tupleContent[*(iter[0])];
-                    if(tupleMatch(tupleValues, columns)==true){
-                        foundSomeone = true;
-                        break;
-                    }
-
-                    //Increments iterators
-                    for(uint32_t i=0; i!=eColNb; ++i){
-                        ++iter[i];
-                        if(iter[i]==tupleTo[i]){
-                            endWhile = true;
-                            break;
-                        }
-                    }
-                    if(endWhile) break;
-                }
-            }
-            //The other cases are more difficult
-            else{
-                //We will iterate in the relevant values
-                Query::Column * filterPredic = NULL;
                 for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
-                    if(pIter->op!=Query::Column::NotEqual){
-                        filterPredic = &(*pIter);
-                        break;
+                    if(pIter->op==Query::Column::Equal){
+                        eCol.push_back(&(*pIter));
                     }
                 }
-                if(filterPredic==NULL) filterPredic = &((*columns)[0]);
 
-                UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
+                Tuple tFrom{v->from, 0};
+                Tuple tTo{v->to+1, 0};
 
-                const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
-                auto tupleListStart = transactionHistory[firstUCol].begin();
-                auto tupleListEnd = transactionHistory[firstUCol].end();
+                //The most common case is when there is at least one equal column
+                if(!eCol.empty()){
+                    //The case of 1 predic, ==
+                    if(q->columnCount==1){
+                        auto filterPredic = &((*columns)[0]);
+                        UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
+                        auto& tupleList = transactionHistory[firstUCol][filterPredic->value];
+                        auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
+                        auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
+                        if(tupleFrom!=tupleTo){
+                            mutexQueryResults.lock();
+                            queryResults[v->validationId]=true;
+                            mutexQueryResults.unlock();
+                        }
+                        //Remove query
+                        queriesToProcess.pop_back();
+                        continue;
+                    }
 
-                if(filterPredic->op==Query::Column::Greater){
-                    tupleListStart = transactionHistory[firstUCol].upper_bound(filterPredic->value);
-                }else if(filterPredic->op==Query::Column::GreaterOrEqual){
-                    tupleListStart = transactionHistory[firstUCol].lower_bound(filterPredic->value);
-                }else if(filterPredic->op==Query::Column::Less){
-                    tupleListEnd = transactionHistory[firstUCol].lower_bound(filterPredic->value);
-                }else if(filterPredic->op==Query::Column::LessOrEqual){
-                    tupleListEnd = transactionHistory[firstUCol].upper_bound(filterPredic->value);
-                }
+                    uint32_t eColNb = eCol.size();
+                    vector<Tuple>::iterator tupleFrom[eColNb];
+                    vector<Tuple>::iterator tupleTo[eColNb];
 
-                //Iterates through the values
-                for(auto iter=tupleListStart; iter!=tupleListEnd && !foundSomeone; ++iter){
-                    //The not equal special case
-                    if(notEqualCase && iter->first==filterPredic->value) continue;
+                    bool foundEmptyList = false;
+                    for(uint32_t i=0; i!=eColNb; ++i){
+                        UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i]->column};
+                        auto tupleList = &(transactionHistory[firstUCol][eCol[i]->value]);
+                        tupleFrom[i] = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
+                        tupleTo[i] = lower_bound(tupleFrom[i], tupleList->end(), tTo);
+                        if(tupleFrom[i]==tupleTo[i]){
+                            foundEmptyList = true;
+                            break;
+                        }
+                    }
 
-                    auto& tupleList = transactionHistory[firstUCol][iter->first];
-                    auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
-                    auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
-                    //Loops through tuples and checks them
-                    for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
-                        auto& tupleValues = tupleContent[*iter2];
+                    if(foundEmptyList){
+                        queriesToProcess.pop_back();
+                        continue;
+                    }
+
+                    vector<Tuple>::iterator iter[eColNb];
+                    //Initializes the iterators
+                    for(uint32_t i=0; i!=eColNb; ++i){
+                        iter[i] = tupleFrom[i];
+                    }
+
+                    //Goes through the iterators
+                    bool endWhile = false;
+                    while(true){
+                        //Adjusts the iterators
+                        bool continueWhile = false;
+                        for(uint32_t i=1; i!=eColNb; ++i){
+                            if(*(iter[0]) != *(iter[i])){
+                                if(*(iter[i]) < *(iter[0])){
+                                    ++iter[i];
+                                    if(iter[i]==tupleTo[i]) endWhile = true;
+                                }else{
+                                    ++iter[0];
+                                    if(iter[0]==tupleTo[0]) endWhile = true;
+                                }
+                                continueWhile=true;
+                                break;
+                            }
+                        }
+                        if(endWhile) break;
+                        if(continueWhile) continue;
+
+                        //Proceeds test
+                        auto& tupleValues = tupleContent[*(iter[0])];
                         if(tupleMatch(tupleValues, columns)==true){
                             foundSomeone = true;
                             break;
                         }
+
+                        //Increments iterators
+                        for(uint32_t i=0; i!=eColNb; ++i){
+                            ++iter[i];
+                            if(iter[i]==tupleTo[i]){
+                                endWhile = true;
+                                break;
+                            }
+                        }
+                        if(endWhile) break;
                     }
                 }
+                //The other cases are more difficult
+                else{
+                    //We will iterate in the relevant values
+                    Query::Column * filterPredic = NULL;
+                    for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
+                        if(pIter->op!=Query::Column::NotEqual){
+                            filterPredic = &(*pIter);
+                            break;
+                        }
+                    }
+                    if(filterPredic==NULL) filterPredic = &((*columns)[0]);
+
+                    UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
+
+                    const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
+                    auto tupleListStart = transactionHistory[firstUCol].begin();
+                    auto tupleListEnd = transactionHistory[firstUCol].end();
+
+                    if(filterPredic->op==Query::Column::Greater){
+                        tupleListStart = transactionHistory[firstUCol].upper_bound(filterPredic->value);
+                    }else if(filterPredic->op==Query::Column::GreaterOrEqual){
+                        tupleListStart = transactionHistory[firstUCol].lower_bound(filterPredic->value);
+                    }else if(filterPredic->op==Query::Column::Less){
+                        tupleListEnd = transactionHistory[firstUCol].lower_bound(filterPredic->value);
+                    }else if(filterPredic->op==Query::Column::LessOrEqual){
+                        tupleListEnd = transactionHistory[firstUCol].upper_bound(filterPredic->value);
+                    }
+
+                    //Iterates through the values
+                    for(auto iter=tupleListStart; iter!=tupleListEnd && !foundSomeone; ++iter){
+                        //The not equal special case
+                        if(notEqualCase && iter->first==filterPredic->value) continue;
+
+                        auto& tupleList = transactionHistory[firstUCol][iter->first];
+                        auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
+                        auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
+                        //Loops through tuples and checks them
+                        for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
+                            auto& tupleValues = tupleContent[*iter2];
+                            if(tupleMatch(tupleValues, columns)==true){
+                                foundSomeone = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                //Updates result
+                if(foundSomeone){
+                    mutexQueryResults.lock();
+                    queryResults[v->validationId]=true;
+                    mutexQueryResults.unlock();
+                }
+
+                /*
+                 * Ends thread query handling
+                 */
             }
 
-            //Updates result
-            if(foundSomeone){
-                mutexQueryResults.lock();
-                queryResults[v->validationId]=true;
-                mutexQueryResults.unlock();
-            }
-
-            /*
-             * Ends thread query handling
-             */
+            //Erase the query from the list
+            queriesToProcess.pop_back();
         }
 
-        //Erase the query from the list
-        queriesToProcess.pop_back();
+        //When done processing decrements processingThreadNb
+        --processingThreadsNb;
+        if(processingThreadsNb==0){
+            //Signals main thread
+            mutexFlush.lock();
+            conditionFlush.notify_all();
+            mutexFlush.unlock();
+        }else{
+            //waits for the releaser thread
+            mutexFlush.lock();
+            conditionFlush.wait(mutexFlush);
+            mutexFlush.unlock();
+        }
     }
+
     pthread_exit(EXIT_SUCCESS);
 }
 //---------------------------------------------------------------------------
@@ -691,6 +718,11 @@ int main()
         tupleContentPtr[thread] = new map<Tuple, vector<uint64_t>>;
         queriesToProcessPtr[thread] = new vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>;
         tuplesToIndexPtr[thread] = new map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>;
+    }
+
+    //Instanciates threads
+    for(uint32_t i=0; i!=nbThreads; ++i){
+        thread(flushThread, i).detach();
     }
 
     vector<char> message;
@@ -723,6 +755,10 @@ int main()
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
+                referenceOver = true;
+                mutexFlush.lock();
+                conditionFlush.notify_all();
+                mutexFlush.unlock();
                 //Desallocates
                 for(uint32_t thread=0; thread!=nbThreads; ++thread){
                     delete transactionHistoryPtr[thread];
