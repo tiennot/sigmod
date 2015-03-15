@@ -46,7 +46,7 @@ using namespace std;
 
 //Declaration for thread handling functions
 void flushThread(uint32_t thread);
-void forgetThread(uint32_t thread, uint64_t transactionId);
+void forgetThread(uint32_t thread);
 
 //---------------------------------------------------------------------------
 // Wire protocol messages
@@ -207,10 +207,11 @@ static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * que
 static map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> * tuplesToIndexPtr[nbThreads];
 
 //Stuff for synchronization
-static atomic<uint32_t> processingThreadsNb(0);
-static condition_variable_any conditionFlush;
-static mutex mutexFlush;
+static atomic<uint32_t> processingFlushThreadsNb(0), processingForgetThreadsNb(0);
+static condition_variable_any conditionFlush, conditionForget;
+static mutex mutexFlush, mutexForget;
 static atomic<bool> referenceOver(false);
+static atomic<uint64_t> forgetTransactionId(0);
 
 //---------------------------------------------------------------------------
 //Function that tells which thread handles a given relation
@@ -370,7 +371,7 @@ static void processFlush(const Flush& f)
     cerr << "Flush " << f.validationId << endl;
 
     //Notifies the flush threads
-    while(processingThreadsNb!=nbThreads){} //Safety while, shoudn't happen
+    while(processingFlushThreadsNb!=nbThreads){} //Safety while, shoudn't happen
     mutexFlush.lock();
     conditionFlush.notify_all();
     conditionFlush.wait(mutexFlush);
@@ -392,33 +393,59 @@ static void processFlush(const Flush& f)
 static void processForget(const Forget& f)
 {
     cerr << "Forget " << f.transactionId << endl;
-    //Instanciates threads in the pool
-    vector<thread> threadPool;
-    for(uint32_t i=0; i!=nbThreads; ++i){
-        threadPool.push_back(thread(forgetThread, i, f.transactionId));
-    }
-    //Waits for the threads to end
-    while(!threadPool.empty()){
-        threadPool.back().join();
-        threadPool.pop_back();
-    }
+
+    //Notifies the Forget threads
+    forgetTransactionId = f.transactionId;
+    while(processingForgetThreadsNb!=nbThreads){} //Safety while, shoudn't happen
+    mutexForget.lock();
+    conditionForget.notify_all();
+    conditionForget.wait(mutexForget);
+    mutexForget.unlock();
 }
 //---------------------------------------------------------------------------
 //Function that handle threads used to process forget
-void forgetThread(uint32_t thread, uint64_t transactionId){
-    Tuple bound{transactionId, 0};
+void forgetThread(uint32_t thread){
     //Erase from transaction history
     auto& transactionHistory = *(transactionHistoryPtr[thread]);
-    for(auto iter=transactionHistory.begin(); iter!=transactionHistory.end(); ++iter){
-        auto * secondMap = &(iter->second);
-        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
-            vector<Tuple> * tuples = &(iter2->second);
-            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+
+    mutexForget.lock();
+    while(true){
+        //Waits for the signal from main thread
+        processingForgetThreadsNb++;
+        conditionForget.wait(mutexForget);
+        mutexForget.unlock();
+
+        if(referenceOver) break;
+
+        /* Actual forget work */
+
+        Tuple bound{forgetTransactionId, 0};
+        for(auto iter=transactionHistory.begin(); iter!=transactionHistory.end(); ++iter){
+            auto * secondMap = &(iter->second);
+            for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+                vector<Tuple> * tuples = &(iter2->second);
+                tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+            }
+        }
+        //Erase from tupleContent
+        auto& tupleContent = *(tupleContentPtr[thread]);
+        tupleContent.erase(tupleContent.begin(), tupleContent.lower_bound(bound));
+
+        /* End of actual forget work */
+
+        //When done processing decrements processingThreadNb
+        if(--processingForgetThreadsNb==0){
+            //Signals main thread
+            mutexForget.lock();
+            conditionForget.notify_all();
+            mutexForget.unlock();
+        }else{
+            //waits for the releaser thread
+            mutexForget.lock();
+            conditionForget.wait(mutexForget);
         }
     }
-    //Erase from tupleContent
-    auto& tupleContent = *(tupleContentPtr[thread]);
-    tupleContent.erase(tupleContent.begin(), tupleContent.lower_bound(bound));
+
     pthread_exit(EXIT_SUCCESS);
 }
 //---------------------------------------------------------------------------
@@ -460,10 +487,10 @@ void flushThread(uint32_t thread){
     map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
     vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>& queriesToProcess = *(queriesToProcessPtr[thread]);
 
+    mutexFlush.lock();
     while(true){
         //Waits for the signal from main thread
-        mutexFlush.lock();
-        processingThreadsNb++;
+        processingFlushThreadsNb++;
         conditionFlush.wait(mutexFlush);
         mutexFlush.unlock();
 
@@ -693,8 +720,7 @@ void flushThread(uint32_t thread){
         }
 
         //When done processing decrements processingThreadNb
-        --processingThreadsNb;
-        if(processingThreadsNb==0){
+        if(--processingFlushThreadsNb==0){
             //Signals main thread
             mutexFlush.lock();
             conditionFlush.notify_all();
@@ -703,7 +729,6 @@ void flushThread(uint32_t thread){
             //waits for the releaser thread
             mutexFlush.lock();
             conditionFlush.wait(mutexFlush);
-            mutexFlush.unlock();
         }
     }
 
@@ -723,6 +748,7 @@ int main()
     //Instanciates threads
     for(uint32_t i=0; i!=nbThreads; ++i){
         thread(flushThread, i).detach();
+        thread(forgetThread, i).detach();
     }
 
     vector<char> message;
@@ -759,6 +785,9 @@ int main()
                 mutexFlush.lock();
                 conditionFlush.notify_all();
                 mutexFlush.unlock();
+                mutexForget.lock();
+                conditionForget.notify_all();
+                mutexForget.unlock();
                 //Desallocates
                 for(uint32_t thread=0; thread!=nbThreads; ++thread){
                     delete transactionHistoryPtr[thread];
