@@ -191,20 +191,24 @@ static vector<uint32_t> schema;
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
 //Maps tuples to their content (and their relation id)
-static map<Tuple, vector<uint64_t>> * tupleContentPtr[nbThreads];
+typedef map<Tuple, vector<uint64_t>> tupleContent_t;
+static  tupleContent_t * tupleContentPtr[nbThreads];
 
 //Maps a relation's column and a value to the tuples that affected it
-static map<UniqueColumn, map<uint64_t, vector<Tuple>>> * transactionHistoryPtr[nbThreads];
+typedef map<UniqueColumn, map<uint64_t, vector<Tuple>>> transactionHistory_t;
+static  transactionHistory_t * transactionHistoryPtr[nbThreads];
 
 //Stores the booleans for output + mutex
 static map<uint64_t,bool> queryResults;
 mutex mutexQueryResults;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each flush thread
-static vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> * queriesToProcessPtr[nbThreads];
+typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
+static queriesToProcess_t * queriesToProcessPtr[nbThreads];
 
 //Lists of tuples and their values to be indexed by each flush thread (for each relation)
-static map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> * tuplesToIndexPtr[nbThreads];
+typedef map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
+static tuplesToIndex_t * tuplesToIndexPtr[nbThreads];
 
 //Stuff for synchronization
 static atomic<uint32_t> processingFlushThreadsNb(0), processingForgetThreadsNb(0);
@@ -237,7 +241,7 @@ static void processTransaction(const Transaction& t)
     Tuple tuple{t.transactionId, 0};
 
     //TupleContentIters allows faster insertions in tupleContent
-    map<Tuple, vector<uint64_t>>::iterator tupleContentIters[nbThreads];
+    tupleContent_t::iterator tupleContentIters[nbThreads];
     for(uint32_t i=0; i!=nbThreads; ++i){
         tupleContentIters[i] = tupleContentPtr[i]->begin();
     }
@@ -490,9 +494,9 @@ inline bool tupleMatch(const vector<uint64_t> &tupleValues, vector<Query::Column
 //Function that handle behavior of flushing threads
 void flushThread(uint32_t thread){
     //Defines aliases for variables according to thread
-    map<UniqueColumn, map<uint64_t, vector<Tuple>>>& transactionHistory = *(transactionHistoryPtr[thread]);
-    map<Tuple, vector<uint64_t>>& tupleContent = *(tupleContentPtr[thread]);
-    vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>& queriesToProcess = *(queriesToProcessPtr[thread]);
+    transactionHistory_t& transactionHistory = *(transactionHistoryPtr[thread]);
+    tupleContent_t& tupleContent = *(tupleContentPtr[thread]);
+    queriesToProcess_t& queriesToProcess = *(queriesToProcessPtr[thread]);
 
     mutexFlush.lock();
     while(true){
@@ -505,7 +509,7 @@ void flushThread(uint32_t thread){
 
         //Index the tuple for its relations
         UniqueColumn uColIndexing{0,0};
-        map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>& tuplesToIndex = *(tuplesToIndexPtr[thread]);
+        tuplesToIndex_t& tuplesToIndex = *(tuplesToIndexPtr[thread]);
         for(auto iter=tuplesToIndex.begin(), iterEnd=tuplesToIndex.end(); iter!=iterEnd; ++iter){
             uColIndexing.relationId = iter->first;
             for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End; ++iter2){
@@ -746,10 +750,10 @@ int main()
 {
     //Allocates maps
     for(uint32_t thread=0; thread!=nbThreads; ++thread){
-        transactionHistoryPtr[thread] = new map<UniqueColumn, map<uint64_t, vector<Tuple>>>;
-        tupleContentPtr[thread] = new map<Tuple, vector<uint64_t>>;
-        queriesToProcessPtr[thread] = new vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>>;
-        tuplesToIndexPtr[thread] = new map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>>;
+        transactionHistoryPtr[thread] = new transactionHistory_t;
+        tupleContentPtr[thread] = new tupleContent_t;
+        queriesToProcessPtr[thread] = new queriesToProcess_t;
+        tuplesToIndexPtr[thread] = new tuplesToIndex_t;
     }
 
     //Instanciates threads
