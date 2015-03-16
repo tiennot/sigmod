@@ -41,6 +41,7 @@
 #include <condition_variable>
 #include <unistd.h>
 #include <string.h>
+#include <boost/container/flat_map.hpp>
 using namespace std;
 //---------------------------------------------------------------------------
 
@@ -191,7 +192,7 @@ static vector<uint32_t> schema;
 static vector<map<uint32_t,vector<uint64_t>>> relations;
 
 //Maps tuples to their content (and their relation id)
-typedef map<Tuple, vector<uint64_t>> tupleContent_t;
+typedef boost::container::flat_map<Tuple, vector<uint64_t>> tupleContent_t;
 static  tupleContent_t * tupleContentPtr[nbThreads];
 
 //Maps a relation's column and a value to the tuples that affected it
@@ -199,7 +200,7 @@ typedef map<UniqueColumn, map<uint64_t, vector<Tuple>>> transactionHistory_t;
 static  transactionHistory_t * transactionHistoryPtr[nbThreads];
 
 //Stores the booleans for output + mutex
-static map<uint64_t,bool> queryResults;
+static boost::container::flat_map<uint64_t,bool> queryResults;
 mutex mutexQueryResults;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each flush thread
