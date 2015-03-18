@@ -589,13 +589,16 @@ void flushThread(uint32_t thread){
                     if(q->columnCount==1){
                         auto filterPredic = &((*columns)[0]);
                         UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
-                        auto& tupleList = transactionHistory[firstUCol][filterPredic->value];
-                        auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
-                        auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
-                        if(tupleFrom!=tupleTo){
-                            mutexQueryResults.lock();
-                            queryResults[v->validationId]=true;
-                            mutexQueryResults.unlock();
+
+                        auto tupleList = transactionHistory[firstUCol].find(filterPredic->value);
+                        if(tupleList!=transactionHistory[firstUCol].end()){
+                            auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
+                            auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
+                            if(tupleFrom!=tupleTo){
+                                mutexQueryResults.lock();
+                                queryResults[v->validationId]=true;
+                                mutexQueryResults.unlock();
+                            }
                         }
                         //Remove query
                         queriesToProcess.pop_back();
@@ -609,12 +612,17 @@ void flushThread(uint32_t thread){
                     bool foundEmptyList = false;
                     for(uint32_t i=0; i!=eColNb; ++i){
                         UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i]->column};
-                        auto tupleList = &(transactionHistory[firstUCol][eCol[i]->value]);
-                        tupleFrom[i] = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
-                        tupleTo[i] = lower_bound(tupleFrom[i], tupleList->end(), tTo);
-                        if(tupleFrom[i]==tupleTo[i]){
+
+                        auto tupleList = transactionHistory[firstUCol].find(eCol[i]->value);
+                        if(tupleList!=transactionHistory[firstUCol].end()){
+                            tupleFrom[i] = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
+                            tupleTo[i] = lower_bound(tupleFrom[i], tupleList->second.end(), tTo);
+                            if(tupleFrom[i]==tupleTo[i]){
+                                foundEmptyList = true;
+                                break;
+                            }
+                        }else{
                             foundEmptyList = true;
-                            break;
                         }
                     }
 
@@ -701,15 +709,17 @@ void flushThread(uint32_t thread){
                         //The not equal special case
                         if(notEqualCase && iter->first==filterPredic->value) continue;
 
-                        auto& tupleList = transactionHistory[firstUCol][iter->first];
-                        auto tupleFrom = lower_bound(tupleList.begin(), tupleList.end(), tFrom);
-                        auto tupleTo = lower_bound(tupleFrom, tupleList.end(), tTo);
-                        //Loops through tuples and checks them
-                        for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
-                            auto& tupleValues = tupleContent[*iter2];
-                            if(tupleMatch(tupleValues, columns)==true){
-                                foundSomeone = true;
-                                break;
+                        auto tupleList = transactionHistory[firstUCol].find(iter->first);
+                        if(tupleList!=transactionHistory[firstUCol].end()){
+                            auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
+                            auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
+                            //Loops through tuples and checks them
+                            for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
+                                auto& tupleValues = tupleContent[*iter2];
+                                if(tupleMatch(tupleValues, columns)==true){
+                                    foundSomeone = true;
+                                    break;
+                                }
                             }
                         }
                     }
