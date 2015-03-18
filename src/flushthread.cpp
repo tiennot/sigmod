@@ -54,8 +54,9 @@ void FlushThread::indexTuples(){
                 (*transactionHistory)[uColIndexing][iter2->second[col]].push_back(iter2->first);
             }
         }
-        iter->second.clear();
     }
+    //Clear the queue of tuples to index
+    tuplesToIndex->clear();
 }
 
 /*
