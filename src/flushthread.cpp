@@ -166,74 +166,33 @@ void FlushThread::processQuery_WithEqualColumns(){
         return;
     }
 
-    uint32_t eColNb = eCol.size();
-    vector<Tuple>::iterator tupleFrom[eColNb];
-    vector<Tuple>::iterator tupleTo[eColNb];
 
-    bool foundEmptyList = false;
-    for(uint32_t i=0; i!=eColNb; ++i){
+    vector<Tuple> * tupleList;
+    uint32_t nbTuples = UINT32_MAX;
+
+    for(uint32_t i=0; i!=eCol.size(); ++i){
         UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i]->column};
-
-        auto tupleList = (*transactionHistory)[firstUCol].find(eCol[i]->value);
-        if(tupleList!=(*transactionHistory)[firstUCol].end()){
-            tupleFrom[i] = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
-            tupleTo[i] = lower_bound(tupleFrom[i], tupleList->second.end(), tTo);
-            if(tupleFrom[i]==tupleTo[i]){
-                foundEmptyList = true;
-                break;
+        auto tupleListCandidate = (*transactionHistory)[firstUCol].find(eCol[i]->value);
+        if(tupleListCandidate!=(*transactionHistory)[firstUCol].end()){
+            if(tupleListCandidate->second.size()<nbTuples){
+                tupleList = &(tupleListCandidate->second);
+                nbTuples = tupleList->size();
             }
         }else{
-            foundEmptyList = true;
+            //Empty list, returns
+            return;
         }
     }
 
-    if(foundEmptyList){
-        return;
-    }
-
-    vector<Tuple>::iterator iter[eColNb];
-    //Initializes the iterators
-    for(uint32_t i=0; i!=eColNb; ++i){
-        iter[i] = tupleFrom[i];
-    }
-
-    //Goes through the iterators
-    bool endWhile = false;
-    while(true){
-        //Adjusts the iterators
-        bool continueWhile = false;
-        for(uint32_t i=1; i!=eColNb; ++i){
-            if(*(iter[0]) != *(iter[i])){
-                if(*(iter[i]) < *(iter[0])){
-                    ++iter[i];
-                    if(iter[i]==tupleTo[i]) endWhile = true;
-                }else{
-                    ++iter[0];
-                    if(iter[0]==tupleTo[0]) endWhile = true;
-                }
-                continueWhile=true;
-                break;
-            }
-        }
-        if(endWhile) break;
-        if(continueWhile) continue;
-
-        //Proceeds test
-        auto& tupleValues = (*tupleContent)[*(iter[0])];
+    //Goes through the tupleList
+    auto iterFrom = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
+    auto iterTo = lower_bound(iterFrom, tupleList->end(), tTo);
+    for(auto iter=iterFrom; iter!=iterTo; ++iter){
+        auto& tupleValues = (*tupleContent)[*iter];
         if(tupleMatch(tupleValues, columns)==true){
             foundSomeone = true;
-            break;
+            return;
         }
-
-        //Increments iterators
-        for(uint32_t i=0; i!=eColNb; ++i){
-            ++iter[i];
-            if(iter[i]==tupleTo[i]){
-                endWhile = true;
-                break;
-            }
-        }
-        if(endWhile) break;
     }
 }
 
