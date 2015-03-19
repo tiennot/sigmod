@@ -29,6 +29,7 @@ private:
     void indexTuples();
     //Processing functions
     void processQuery_NoColumn();
+    void processQuery_OneEqualOnly();
     void processQuery_WithEqualColumns();
     void processQuery_WithNoEqualColumns();
     //Attributes for query processing

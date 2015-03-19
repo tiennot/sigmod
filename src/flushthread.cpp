@@ -89,6 +89,14 @@ void FlushThread::processQueries(){
             //If there is no column (shouldn't happen often)
             if(q->columnCount==0){
                 processQuery_NoColumn();
+                queriesToProcess->pop_back();
+                continue;
+            }
+
+
+            if(q->columnCount==1 && columns->begin()->op==Query::Column::Equal){
+                processQuery_OneEqualOnly();
+                queriesToProcess->pop_back();
                 continue;
             }
 
@@ -139,34 +147,30 @@ void FlushThread::processQuery_NoColumn(){
         queryResults[v->validationId]=true;
         mutexQueryResults.unlock();
     }
-    //Remove query
-    queriesToProcess->pop_back();
+}
+
+/*
+ * Process the query when the only predic is ==
+ */
+void FlushThread::processQuery_OneEqualOnly(){
+    auto filterPredic = &((*columns)[0]);
+    UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
+    auto tupleList = (*transactionHistory)[firstUCol].find(filterPredic->value);
+    if(tupleList!= (*transactionHistory)[firstUCol].end()){
+        auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
+        auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
+        if(tupleFrom!=tupleTo){
+            mutexQueryResults.lock();
+            queryResults[v->validationId]=true;
+            mutexQueryResults.unlock();
+        }
+    }
 }
 
 /*
  * Process the query when there is at least one == predicate
  */
 void FlushThread::processQuery_WithEqualColumns(){
-    //The case of 1 predic, ==
-    if(q->columnCount==1){
-        auto filterPredic = &((*columns)[0]);
-        UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
-
-        auto tupleList = (*transactionHistory)[firstUCol].find(filterPredic->value);
-        if(tupleList!= (*transactionHistory)[firstUCol].end()){
-            auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
-            auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
-            if(tupleFrom!=tupleTo){
-                mutexQueryResults.lock();
-                queryResults[v->validationId]=true;
-                mutexQueryResults.unlock();
-            }
-        }
-        //Ends function
-        return;
-    }
-
-
     vector<Tuple> * tupleList;
     uint32_t nbTuples = UINT32_MAX;
 
