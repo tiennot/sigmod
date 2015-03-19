@@ -23,6 +23,7 @@ private:
     tupleContent_t * tupleContent;
     queriesToProcess_t * queriesToProcess;
     tuplesToIndex_t * tuplesToIndex;
+    uColIndicator_t * uColIndicator;
     //Process the queries from the queue
     void processQueries();
     //Index the tuples from the queue

@@ -9,6 +9,7 @@ void FlushThread::launch(){
     tupleContent = tupleContentPtr[thread];
     queriesToProcess = queriesToProcessPtr[thread];
     tuplesToIndex = tuplesToIndexPtr[thread];
+    uColIndicator = uColIndicatorPtr[thread];
 
     mutexFlush.lock();
     while(true){
@@ -51,7 +52,16 @@ void FlushThread::indexTuples(){
             //For each column we add the value to the history
             for(uint32_t col=0, nbCol=iter2->second.size(); col!=nbCol; ++col){
                 uColIndexing.column = col;
-                (*transactionHistory)[uColIndexing][iter2->second[col]].push_back(iter2->first);
+                uint64_t value = iter2->second[col];
+                auto tupleList = &((*transactionHistory)[uColIndexing][value]);
+                //Updates stats
+                UColFigures  * uColFigures = &((*uColIndicator)[uColIndexing]);
+                if(value > uColFigures->maxValue) uColFigures->maxValue = value;
+                if(value < uColFigures->minValue) uColFigures->minValue = value;
+                if(tupleList->empty()) ++uColFigures->nbOfValues;
+                ++uColFigures->nbOfTuples;
+                //Adds the value to the list
+                tupleList->push_back(iter2->first);
             }
         }
     }
@@ -200,17 +210,19 @@ void FlushThread::processQuery_WithEqualColumns(){
     }
 }
 
-
 /*
  * Process the query when there is no == predicate
  */
 void FlushThread::processQuery_WithNoEqualColumns(){
     //We will iterate in the relevant values
     Query::Column * filterPredic = NULL;
+    uint64_t estimatedNbOfTuples = UINT64_MAX;
     for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
-        if(pIter->op!=Query::Column::NotEqual){
+        uint64_t newEstim = ((UColFigures) (*uColIndicator)[UniqueColumn{q->relationId, pIter->column}]).estimateNbTuples(&(*pIter));
+        if(newEstim<estimatedNbOfTuples){
             filterPredic = &(*pIter);
-            break;
+            estimatedNbOfTuples = newEstim;
+            if(newEstim==0) break;
         }
     }
     if(filterPredic==NULL) filterPredic = &((*columns)[0]);

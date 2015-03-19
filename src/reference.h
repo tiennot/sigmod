@@ -179,12 +179,53 @@ struct UniqueColumn {
 };
 
 //---------------------------------------------------------------------------
+//A structure to keep "stats" for each unique column
+//---------------------------------------------------------------------------
+struct UColFigures {
+    //The nb of distinct values that affected
+    uint64_t nbOfValues;
+    //The total nb of tuple that affected
+    uint64_t nbOfTuples;
+    //The minimum value that affected the column
+    uint64_t minValue;
+    //The maximum unique value that affected the column
+    uint64_t maxValue;
+
+    //Constructor
+    UColFigures(): nbOfValues(0), nbOfTuples(0), minValue(UINT64_MAX), maxValue(0) {}
+
+    //Give the estimated number of tuples
+    uint64_t estimateNbTuples(Query::Column * column){
+        if(minValue==maxValue) return nbOfTuples;
+        switch(column->op){
+        case Query::Column::Greater:
+        case Query::Column::GreaterOrEqual:
+            if(column->value > maxValue) return 0;
+            return nbOfTuples*(maxValue-column->value); // /(maxValue-minValue);
+        case Query::Column::Less:
+        case Query::Column::LessOrEqual:
+            if(column->value < minValue) return 0;
+            return nbOfTuples*(column->value-minValue); // /(maxValue-minValue);
+        case Query::Column::NotEqual:
+            return nbOfTuples * (maxValue - minValue);
+        case Query::Column::Equal:
+            if(column->value > maxValue || column->value < minValue) return 0;
+            return nbOfTuples * (maxValue - minValue) / nbOfValues;
+        default:
+            //Should never happen
+            return nbOfTuples * (maxValue - minValue);
+        }
+    }
+};
+
+//---------------------------------------------------------------------------
 //Define types
 //---------------------------------------------------------------------------
 typedef boost::container::flat_map<Tuple, vector<uint64_t>> tupleContent_t;
 typedef map<UniqueColumn, map<uint64_t, vector<Tuple>>> transactionHistory_t;
 typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
 typedef map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
+typedef map<UniqueColumn, UColFigures> uColIndicator_t;
 
 //---------------------------------------------------------------------------
 //Extern declarations
@@ -197,6 +238,7 @@ extern boost::container::flat_map<uint64_t,bool> queryResults;
 extern mutex mutexQueryResults;
 extern queriesToProcess_t * queriesToProcessPtr[];
 extern tuplesToIndex_t * tuplesToIndexPtr[];
+extern uColIndicator_t * uColIndicatorPtr[];
 extern atomic<uint32_t> processingFlushThreadsNb, processingForgetThreadsNb;
 extern condition_variable_any conditionFlush, conditionForget;
 extern mutex mutexFlush, mutexForget;

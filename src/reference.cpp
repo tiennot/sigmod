@@ -24,6 +24,9 @@ queriesToProcess_t * queriesToProcessPtr[NB_THREAD];
 //Lists of tuples and their values to be indexed by each flush thread (for each relation)
 tuplesToIndex_t * tuplesToIndexPtr[NB_THREAD];
 
+//Maps each unique column with figures
+uColIndicator_t * uColIndicatorPtr[NB_THREAD];
+
 //Stuff for synchronization
 atomic<uint32_t> processingFlushThreadsNb(0), processingForgetThreadsNb(0);
 condition_variable_any conditionFlush, conditionForget;
@@ -238,6 +241,7 @@ int main()
         tupleContentPtr[thread] = new tupleContent_t;
         queriesToProcessPtr[thread] = new queriesToProcess_t;
         tuplesToIndexPtr[thread] = new tuplesToIndex_t;
+        uColIndicatorPtr[thread] = new uColIndicator_t;
     }
 
     //Instanciates threads
@@ -289,6 +293,7 @@ int main()
                     delete tupleContentPtr[thread];
                     delete queriesToProcessPtr[thread];
                     delete tuplesToIndexPtr[thread];
+                    delete uColIndicatorPtr[thread];
                 }
                 return 0;
             default:
