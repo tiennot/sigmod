@@ -46,9 +46,10 @@ void FlushThread::launch(){
  */
 void FlushThread::indexTuples(){
     UniqueColumn uColIndexing{0,0};
+    auto iterTC = tupleContent->begin();
     for(auto iter=tuplesToIndex->begin(), iterEnd=tuplesToIndex->end(); iter!=iterEnd; ++iter){
         uColIndexing.relationId = iter->first;
-        for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End; ++iter2){
+        for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End;){
             //For each column we add the value to the history
             for(uint32_t col=0, nbCol=iter2->second.size(); col!=nbCol; ++col){
                 uColIndexing.column = col;
@@ -63,6 +64,10 @@ void FlushThread::indexTuples(){
                 //Adds the value to the list
                 tupleList->push_back(iter2->first);
             }
+            //Adds to tupleContent
+            auto toInsert = iter2;
+            ++iter2;
+            iterTC = tupleContent->insert(iterTC, move(*toInsert));
         }
     }
     //Clear the queue of tuples to index

@@ -40,13 +40,14 @@ void ForgetThread::processForget(){
         auto * secondMap = &(iter->second);
         for(auto iter2=secondMap->begin(); iter2!=secondMap->end();){
             vector<Tuple> * tuples = &(iter2->second);
-            tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
-            if(tuples->empty()){
+            auto lwrBound = lower_bound(tuples->begin(), tuples->end(), bound);
+            if(lwrBound!=tuples->end()){
+                tuples->erase(tuples->begin(), lwrBound);
+                ++iter2;
+            }else{
                 auto toErase = iter2;
                 ++iter2;
                 secondMap->erase(toErase);
-            }else{
-                ++iter2;
             }
         }
     }

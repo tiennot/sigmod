@@ -52,12 +52,6 @@ static void processTransaction(const Transaction& t)
     //Tuple identifier
     Tuple tuple{t.transactionId, 0};
 
-    //TupleContentIters allows faster insertions in tupleContent
-    tupleContent_t::iterator tupleContentIters[NB_THREAD];
-    for(uint32_t i=0; i!=NB_THREAD; ++i){
-        tupleContentIters[i] = tupleContentPtr[i]->begin();
-    }
-
     const char* reader=t.operations;
 
     // Delete all indicated tuples
@@ -73,9 +67,8 @@ static void processTransaction(const Transaction& t)
             if (relations[o->relationId].count(*key)) {
                 vector<uint64_t>& tupleValues = relations[o->relationId][*key];
                 //Adds to the tuples to index
-                (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, tupleValues));
-                //Move to tupleContent and erase
-                tupleContentIters[thread] = tupleContentPtr[thread]->insert(tupleContentIters[thread], pair<Tuple, vector<uint64_t>>(tuple,move(tupleValues)));
+                (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, move(tupleValues)));
+                //Erase
                 relations[o->relationId].erase(*key);
                 //Increments internId
                 ++tuple.internId;
@@ -97,8 +90,7 @@ static void processTransaction(const Transaction& t)
             tupleValues.insert(tupleValues.begin(),values,values+schema[o->relationId]);
             //Adds to the tuples to index
             (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, tupleValues));
-            //Adds to tupleContent and inserts
-            tupleContentIters[thread] = tupleContentPtr[thread]->insert(tupleContentIters[thread], pair<Tuple, vector<uint64_t>>(tuple,tupleValues));
+            //Inserts
             relations[o->relationId][values[0]]=move(tupleValues);
             //Increments internId
             ++tuple.internId;
