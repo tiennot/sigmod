@@ -38,9 +38,16 @@ void ForgetThread::processForget(){
     Tuple bound{forgetTransactionId, 0};
     for(auto iter=transactionHistory->begin(); iter!=transactionHistory->end(); ++iter){
         auto * secondMap = &(iter->second);
-        for(auto iter2=secondMap->begin(); iter2!=secondMap->end(); ++iter2){
+        for(auto iter2=secondMap->begin(); iter2!=secondMap->end();){
             vector<Tuple> * tuples = &(iter2->second);
             tuples->erase(tuples->begin(), lower_bound(tuples->begin(), tuples->end(), bound));
+            if(tuples->empty()){
+                auto toErase = iter2;
+                ++iter2;
+                secondMap->erase(toErase);
+            }else{
+                ++iter2;
+            }
         }
     }
     //Erase from tupleContent
