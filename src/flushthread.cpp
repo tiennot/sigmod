@@ -49,24 +49,22 @@ void FlushThread::indexTuples(){
     auto iterTC = tupleContent->begin();
     for(auto iter=tuplesToIndex->begin(), iterEnd=tuplesToIndex->end(); iter!=iterEnd; ++iter){
         uColIndexing.relationId = iter->first;
-        for(auto iter2=iter->second.begin(), iter2End=iter->second.end(); iter2!=iter2End;++iter2){
-            //For each column we add the value to the history
-            for(uint32_t col=0, nbCol=iter2->second.size(); col!=nbCol; ++col){
-                uColIndexing.column = col;
-                uint64_t value = iter2->second[col];
-                auto tupleList = &((*transactionHistory)[uColIndexing][value]);
-                //Updates stats
-                UColFigures  * uColFigures = &((*uColIndicator)[uColIndexing]);
-                if(value > uColFigures->maxValue) uColFigures->maxValue = value;
-                if(value < uColFigures->minValue) uColFigures->minValue = value;
-                if(tupleList->empty()) ++uColFigures->nbOfValues;
-                ++uColFigures->nbOfTuples;
-                //Adds the value to the list
-                tupleList->push_back(iter2->first);
-            }
-            //Adds to tupleContent
-            iterTC = tupleContent->insert(iterTC, move(*iter2));
+        //For each column we add the value to the history
+        for(uint32_t col=0, nbCol=iter->second.second.size(); col!=nbCol; ++col){
+            uColIndexing.column = col;
+            uint64_t value = iter->second.second[col];
+            auto tupleList = &((*transactionHistory)[uColIndexing][value]);
+            //Updates stats
+            UColFigures  * uColFigures = &((*uColIndicator)[uColIndexing]);
+            if(value > uColFigures->maxValue) uColFigures->maxValue = value;
+            if(value < uColFigures->minValue) uColFigures->minValue = value;
+            if(tupleList->empty()) ++uColFigures->nbOfValues;
+            ++uColFigures->nbOfTuples;
+            //Adds the value to the list
+            tupleList->push_back(iter->second.first);
         }
+        //Adds to tupleContent
+        iterTC = tupleContent->insert(iterTC, move(iter->second));
     }
     //Clear the queue of tuples to index
     tuplesToIndex->clear();

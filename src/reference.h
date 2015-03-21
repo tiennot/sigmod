@@ -224,7 +224,7 @@ struct UColFigures {
 typedef boost::container::flat_map<Tuple, vector<uint64_t>> tupleContent_t;
 typedef map<UniqueColumn, map<uint64_t, vector<Tuple>>> transactionHistory_t;
 typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
-typedef map<uint32_t, vector<pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
+typedef vector<pair<uint32_t, pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
 typedef map<UniqueColumn, UColFigures> uColIndicator_t;
 
 //---------------------------------------------------------------------------

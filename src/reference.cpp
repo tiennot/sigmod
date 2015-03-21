@@ -67,7 +67,7 @@ static void processTransaction(const Transaction& t)
             if (relations[o->relationId].count(*key)) {
                 vector<uint64_t>& tupleValues = relations[o->relationId][*key];
                 //Adds to the tuples to index
-                (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, move(tupleValues)));
+                (*tuplesToIndexPtr[thread]).push_back(pair<uint32_t, pair<Tuple, vector<uint64_t>>>(o->relationId, pair<Tuple, vector<uint64_t>>(tuple, move(tupleValues))));
                 //Erase
                 relations[o->relationId].erase(*key);
                 //Increments internId
@@ -89,7 +89,7 @@ static void processTransaction(const Transaction& t)
             vector<uint64_t> tupleValues;
             tupleValues.insert(tupleValues.begin(),values,values+schema[o->relationId]);
             //Adds to the tuples to index
-            (*tuplesToIndexPtr[thread])[o->relationId].push_back(pair<Tuple, vector<uint64_t>>(tuple, tupleValues));
+            (*tuplesToIndexPtr[thread]).push_back(pair<uint32_t, pair<Tuple, vector<uint64_t>>>(o->relationId, pair<Tuple, vector<uint64_t>>(tuple, tupleValues)));
             //Inserts
             relations[o->relationId][values[0]]=move(tupleValues);
             //Increments internId
