@@ -86,12 +86,12 @@ static void processTransaction(const Transaction& t)
 
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
-            vector<uint64_t> tupleValues;
-            tupleValues.insert(tupleValues.begin(),values,values+schema[o->relationId]);
             //Adds to the tuples to index
-            (*tuplesToIndexPtr[thread]).push_back(pair<uint32_t, pair<Tuple, vector<uint64_t>>>(o->relationId, pair<Tuple, vector<uint64_t>>(tuple, tupleValues)));
+            tuplesToIndexPtr[thread]->push_back(make_pair(o->relationId, make_pair(tuple, vector<uint64_t>())));
+            auto * tupleValues = &(tuplesToIndexPtr[thread]->back().second.second);
+            tupleValues->insert(tupleValues->begin(),values,values+schema[o->relationId]);
             //Inserts
-            relations[o->relationId][values[0]]=move(tupleValues);
+            relations[o->relationId][values[0]] = *tupleValues;
             //Increments internId
             ++tuple.internId;
         }
@@ -165,13 +165,13 @@ static void processValidationQueries(const ValidationQueries& v)
 
         //Adds query to the list to process by the relevant thread
         if(!notToBePushed){
-            //Build vector of columns
-            vector<Query::Column> vColumns;
-            vColumns.resize(q.columnCount);
-            memmove(vColumns.data(), &(q.columns), (sizeof(Query::Column)*q.columnCount));
             //Push
             auto thread = assignedThread(q.relationId);
-            queriesToProcessPtr[thread]->push_back(pair<ValidationQueries, pair<Query, vector<Query::Column>>>(v, pair<Query, vector<Query::Column>>(q, move(vColumns))));
+            queriesToProcessPtr[thread]->push_back(make_pair(v, make_pair(q, vector<Query::Column>())));
+            //Adds the columns
+            vector<Query::Column> * vCol = &(queriesToProcessPtr[thread]->back().second.second);
+            vCol->resize(q.columnCount);
+            memmove(vCol->data(), &(q.columns), (sizeof(Query::Column)*q.columnCount));
         }else{
             queryResults[v.validationId] = false;
         }
