@@ -162,23 +162,6 @@ struct Tuple {
 };
 
 //---------------------------------------------------------------------------
-//A structure to identify a unique column
-//---------------------------------------------------------------------------
-struct UniqueColumn {
-    uint32_t relationId; //Id of the relation
-    uint32_t column; //The column number
-
-    bool operator<(const UniqueColumn& col) const{
-        return relationId < col.relationId
-                || (relationId==col.relationId && column<col.column);
-    }
-
-    bool operator==(const UniqueColumn& col) const{
-        return column == col.column && relationId == col.relationId;
-    }
-};
-
-//---------------------------------------------------------------------------
 //A structure to keep "stats" for each unique column
 //---------------------------------------------------------------------------
 struct UColFigures {
@@ -222,10 +205,10 @@ struct UColFigures {
 //Define types
 //---------------------------------------------------------------------------
 typedef boost::container::flat_map<Tuple, vector<uint64_t>> tupleContent_t;
-typedef map<UniqueColumn, map<uint64_t, vector<Tuple>>> transactionHistory_t;
+typedef vector<vector<map<uint64_t, vector<Tuple>> *>> transactionHistory_t;
 typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
 typedef vector<pair<uint32_t, pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
-typedef map<UniqueColumn, UColFigures> uColIndicator_t;
+typedef vector<vector<UColFigures>> uColIndicator_t;
 
 //---------------------------------------------------------------------------
 //Extern declarations

@@ -45,6 +45,20 @@ static void processDefineSchema(const DefineSchema& d)
     //Resizes relation vector
     relations.clear();
     relations.resize(d.relationCount);
+
+    //Allocates maps for history
+    for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
+        transactionHistoryPtr[thread]->resize(schema.size());
+        uColIndicatorPtr[thread]->resize(schema.size());
+    }
+    for(uint32_t i=0; i!=schema.size(); ++i){
+        auto thread = assignedThread(i);
+        (*transactionHistoryPtr[thread])[i].resize(schema[i]);
+        (*uColIndicatorPtr[thread])[i].resize(schema[i]);
+        for(uint32_t j=0; j!=schema[i]; ++j){
+            (*transactionHistoryPtr[thread])[i][j] = new map<uint64_t, vector<Tuple>>;
+        }
+    }
 }
 //---------------------------------------------------------------------------
 static void processTransaction(const Transaction& t)
@@ -227,6 +241,8 @@ template<typename Type> static const Type& readBody(istream& in,vector<char>& bu
 //---------------------------------------------------------------------------
 int main()
 {
+    //cerr << "Pause... "; sleep(15); cerr << "Resumes..." << endl;
+
     //Allocates maps
     for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
         transactionHistoryPtr[thread] = new transactionHistory_t;
@@ -268,7 +284,6 @@ int main()
                 processForget(readBody<Forget>(cin,message,head.messageLen));
                 break;
             case MessageHead::DefineSchema:
-                //cerr << "Pause... "; sleep(15); cerr << "Resumes..." << endl;
                 processDefineSchema(readBody<DefineSchema>(cin,message,head.messageLen));
                 break;
             case MessageHead::Done:
@@ -279,6 +294,13 @@ int main()
                 mutexForget.lock();
                 conditionForget.notify_all();
                 mutexForget.unlock();
+                //Desallocates history
+                for(uint32_t i=0; i!=schema.size(); ++i){
+                    auto thread = assignedThread(i);
+                    for(uint32_t j=0; j!=schema[i]; ++j){
+                        delete (*(transactionHistoryPtr[thread]))[i][j];
+                    }
+                }
                 //Desallocates
                 for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
                     delete transactionHistoryPtr[thread];

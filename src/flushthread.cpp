@@ -45,17 +45,15 @@ void FlushThread::launch(){
  * Index all the tuples from tuplesToIndex
  */
 void FlushThread::indexTuples(){
-    UniqueColumn uColIndexing{0,0};
     auto iterTC = tupleContent->begin();
     for(auto iter=tuplesToIndex->begin(), iterEnd=tuplesToIndex->end(); iter!=iterEnd; ++iter){
-        uColIndexing.relationId = iter->first;
+        auto relationId = iter->first;
         //For each column we add the value to the history
         for(uint32_t col=0, nbCol=iter->second.second.size(); col!=nbCol; ++col){
-            uColIndexing.column = col;
             uint64_t value = iter->second.second[col];
-            auto tupleList = &((*transactionHistory)[uColIndexing][value]);
+            auto tupleList = &(*(*transactionHistory)[relationId][col])[value];
             //Updates stats
-            UColFigures  * uColFigures = &((*uColIndicator)[uColIndexing]);
+            UColFigures  * uColFigures = &((*uColIndicator)[relationId][col]);
             if(value > uColFigures->maxValue) uColFigures->maxValue = value;
             if(value < uColFigures->minValue) uColFigures->minValue = value;
             if(tupleList->empty()) ++uColFigures->nbOfValues;
@@ -143,10 +141,9 @@ void FlushThread::processQueries(){
  * Process the query when there is no column (shouldn't happen very often)
  */
 void FlushThread::processQuery_NoColumn(){
-    UniqueColumn uCol{q->relationId, 0};
     //Query conflicts if there is at least one transaction affecting the relation
     bool found = false;
-    for(auto iter: (*transactionHistory)[uCol]){
+    for(auto iter: *(*transactionHistory)[q->relationId][0]){
         auto lowerBound = lower_bound(iter.second.begin(), iter.second.end(), tFrom);
         if(lowerBound!=iter.second.end() && (*lowerBound).transactionId<=v->to){
             found=true;
@@ -165,9 +162,9 @@ void FlushThread::processQuery_NoColumn(){
  */
 void FlushThread::processQuery_OneEqualOnly(){
     auto filterPredic = &((*columns)[0]);
-    UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
-    auto tupleList = (*transactionHistory)[firstUCol].find(filterPredic->value);
-    if(tupleList!= (*transactionHistory)[firstUCol].end()){
+    auto map = (*transactionHistory)[q->relationId][filterPredic->column];
+    auto tupleList = map->find(filterPredic->value);
+    if(tupleList!= map->end()){
         auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
         auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
         if(tupleFrom!=tupleTo){
@@ -186,9 +183,9 @@ void FlushThread::processQuery_WithEqualColumns(){
     uint32_t nbTuples = UINT32_MAX;
 
     for(uint32_t i=0; i!=eCol.size(); ++i){
-        UniqueColumn firstUCol = UniqueColumn{q->relationId, eCol[i]->column};
-        auto tupleListCandidate = (*transactionHistory)[firstUCol].find(eCol[i]->value);
-        if(tupleListCandidate!=(*transactionHistory)[firstUCol].end()){
+        auto map = (*transactionHistory)[q->relationId][eCol[i]->column];
+        auto tupleListCandidate = map->find(eCol[i]->value);
+        if(tupleListCandidate!=map->end()){
             if(tupleListCandidate->second.size()<nbTuples){
                 tupleList = &(tupleListCandidate->second);
                 nbTuples = tupleList->size();
@@ -219,7 +216,7 @@ void FlushThread::processQuery_WithNoEqualColumns(){
     Query::Column * filterPredic = NULL;
     uint64_t estimatedNbOfTuples = UINT64_MAX;
     for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
-        uint64_t newEstim = ((UColFigures) (*uColIndicator)[UniqueColumn{q->relationId, pIter->column}]).estimateNbTuples(&(*pIter));
+        uint64_t newEstim = ((UColFigures) (*uColIndicator)[q->relationId][pIter->column]).estimateNbTuples(&(*pIter));
         if(newEstim<estimatedNbOfTuples){
             filterPredic = &(*pIter);
             estimatedNbOfTuples = newEstim;
@@ -228,20 +225,20 @@ void FlushThread::processQuery_WithNoEqualColumns(){
     }
     if(filterPredic==NULL) filterPredic = &((*columns)[0]);
 
-    UniqueColumn firstUCol = UniqueColumn{q->relationId, filterPredic->column};
+    auto map = (*transactionHistory)[q->relationId][filterPredic->column];
 
     const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
-    auto tupleListStart = (*transactionHistory)[firstUCol].begin();
-    auto tupleListEnd = (*transactionHistory)[firstUCol].end();
+    auto tupleListStart = map->begin();
+    auto tupleListEnd = map->end();
 
     if(filterPredic->op==Query::Column::Greater){
-        tupleListStart = (*transactionHistory)[firstUCol].upper_bound(filterPredic->value);
+        tupleListStart = map->upper_bound(filterPredic->value);
     }else if(filterPredic->op==Query::Column::GreaterOrEqual){
-        tupleListStart = (*transactionHistory)[firstUCol].lower_bound(filterPredic->value);
+        tupleListStart = map->lower_bound(filterPredic->value);
     }else if(filterPredic->op==Query::Column::Less){
-        tupleListEnd = (*transactionHistory)[firstUCol].lower_bound(filterPredic->value);
+        tupleListEnd = map->lower_bound(filterPredic->value);
     }else if(filterPredic->op==Query::Column::LessOrEqual){
-        tupleListEnd = (*transactionHistory)[firstUCol].upper_bound(filterPredic->value);
+        tupleListEnd = map->upper_bound(filterPredic->value);
     }
 
     //Iterates through the values
@@ -249,8 +246,8 @@ void FlushThread::processQuery_WithNoEqualColumns(){
         //The not equal special case
         if(notEqualCase && iter->first==filterPredic->value) continue;
 
-        auto tupleList = (*transactionHistory)[firstUCol].find(iter->first);
-        if(tupleList!=(*transactionHistory)[firstUCol].end()){
+        auto tupleList = map->find(iter->first);
+        if(tupleList!=map->end()){
             auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
             auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
             //Loops through tuples and checks them
