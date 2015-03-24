@@ -97,31 +97,29 @@ void FlushThread::processQueries(){
 
             //If there is no column (shouldn't happen often)
             if(q->columnCount==0){
-                processQuery_NoColumn();
-                queriesToProcess->pop_back();
-                continue;
+                foundSomeone = processQuery_NoColumn();
             }
 
-
-            if(q->columnCount==1 && columns->begin()->op==Query::Column::Equal){
-                processQuery_OneEqualOnly();
-                queriesToProcess->pop_back();
-                continue;
+            //The one predicate, == case
+            else if(q->columnCount==1 && columns->begin()->op==Query::Column::Equal){
+                foundSomeone = processQuery_OneEqualOnly();
             }
 
-            //Looks for the "right" strategy to test the tuples
-            eCol.clear();
-            for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
-                if(pIter->op==Query::Column::Equal){
-                    eCol.push_back(&(*pIter));
+            //Other cases
+            else{
+                //Build vector of == predics
+                eCol.clear();
+                for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
+                    if(pIter->op==Query::Column::Equal){
+                        eCol.push_back(&(*pIter));
+                    }
                 }
-            }
-
-            //Calls right function according to == predic
-            if(!eCol.empty()){
-                processQuery_WithEqualColumns();
-            }else{
-                processQuery_WithNoEqualColumns();
+                //Call according to number of == predic
+                if(!eCol.empty()){
+                    foundSomeone = processQuery_WithEqualColumns();
+                }else{
+                    foundSomeone = processQuery_WithNoEqualColumns();
+                }
             }
 
             //Updates result if needed
@@ -140,27 +138,21 @@ void FlushThread::processQueries(){
 /*
  * Process the query when there is no column (shouldn't happen very often)
  */
-void FlushThread::processQuery_NoColumn(){
+bool FlushThread::processQuery_NoColumn() const{
     //Query conflicts if there is at least one transaction affecting the relation
-    bool found = false;
     for(auto iter: *(*transactionHistory)[q->relationId][0]){
         auto lowerBound = lower_bound(iter.second.begin(), iter.second.end(), tFrom);
         if(lowerBound!=iter.second.end() && (*lowerBound).transactionId<=v->to){
-            found=true;
-            break;
+            return true;
         }
     }
-    if(found){
-        mutexQueryResults.lock();
-        queryResults[v->validationId]=true;
-        mutexQueryResults.unlock();
-    }
+    return false;
 }
 
 /*
  * Process the query when the only predic is ==
  */
-void FlushThread::processQuery_OneEqualOnly(){
+bool FlushThread::processQuery_OneEqualOnly() const{
     auto filterPredic = &((*columns)[0]);
     auto map = (*transactionHistory)[q->relationId][filterPredic->column];
     auto tupleList = map->find(filterPredic->value);
@@ -168,17 +160,16 @@ void FlushThread::processQuery_OneEqualOnly(){
         auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
         auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
         if(tupleFrom!=tupleTo){
-            mutexQueryResults.lock();
-            queryResults[v->validationId]=true;
-            mutexQueryResults.unlock();
+            return true;
         }
     }
+    return false;
 }
 
 /*
  * Process the query when there is at least one == predicate
  */
-void FlushThread::processQuery_WithEqualColumns(){
+bool FlushThread::processQuery_WithEqualColumns() const{
     vector<Tuple> * tupleList;
     uint32_t nbTuples = UINT32_MAX;
 
@@ -192,7 +183,7 @@ void FlushThread::processQuery_WithEqualColumns(){
             }
         }else{
             //Empty list, returns
-            return;
+            return false;
         }
     }
 
@@ -201,17 +192,17 @@ void FlushThread::processQuery_WithEqualColumns(){
     auto iterTo = lower_bound(iterFrom, tupleList->end(), tTo);
     for(auto iter=iterFrom; iter!=iterTo; ++iter){
         auto& tupleValues = (*tupleContent)[*iter];
-        if(tupleMatch(tupleValues, columns)==true){
-            foundSomeone = true;
-            return;
+        if(tupleMatch(tupleValues, columns)){
+            return true;
         }
     }
+    return false;
 }
 
 /*
  * Process the query when there is no == predicate
  */
-void FlushThread::processQuery_WithNoEqualColumns(){
+bool FlushThread::processQuery_WithNoEqualColumns() const{
     //We will iterate in the relevant values
     Query::Column * filterPredic = NULL;
     uint64_t estimatedNbOfTuples = UINT64_MAX;
@@ -254,10 +245,10 @@ void FlushThread::processQuery_WithNoEqualColumns(){
             for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
                 auto& tupleValues = (*tupleContent)[*iter2];
                 if(tupleMatch(tupleValues, columns)==true){
-                    foundSomeone = true;
-                    break;
+                    return true;
                 }
             }
         }
     }
+    return false;
 }

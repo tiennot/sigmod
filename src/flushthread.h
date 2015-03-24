@@ -29,10 +29,10 @@ private:
     //Index the tuples from the queue
     void indexTuples();
     //Processing functions
-    void processQuery_NoColumn();
-    void processQuery_OneEqualOnly();
-    void processQuery_WithEqualColumns();
-    void processQuery_WithNoEqualColumns();
+    bool processQuery_NoColumn() const;
+    bool processQuery_OneEqualOnly() const;
+    bool processQuery_WithEqualColumns() const;
+    bool processQuery_WithNoEqualColumns() const;
     //Attributes for query processing
     ValidationQueries * v;
     Query * q;
