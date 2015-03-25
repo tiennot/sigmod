@@ -46,14 +46,11 @@
 #include <unistd.h>
 #include <string.h>
 #include <boost/container/flat_map.hpp>
+#include "tuplecbuffer.h"
 
 #define NB_THREAD 8
 
 using namespace std;
-
-//---------------------------------------------------------------------------
-//Declaration for thread handling functions
-void forgetThread(uint32_t thread);
 
 //---------------------------------------------------------------------------
 // Wire protocol messages
@@ -135,33 +132,6 @@ struct Forget {
 };
 
 //---------------------------------------------------------------------------
-//A structure to identify a unique tuple
-//---------------------------------------------------------------------------
-struct Tuple {
-    uint64_t transactionId; //Id of the transaction
-    uint64_t internId; //Index of the insertion/deletion
-
-    bool operator<(const Tuple& tuple) const{
-        return transactionId < tuple.transactionId ||
-                (transactionId==tuple.transactionId && internId<tuple.internId);
-    }
-
-    bool operator==(const Tuple& tuple) const{
-        return transactionId==tuple.transactionId && internId==tuple.internId;
-    }
-
-    bool operator!=(const Tuple& tuple) const{
-        return transactionId!=tuple.transactionId || internId!=tuple.internId;
-    }
-
-    friend ostream &operator<<(ostream &out, Tuple tuple){
-        out << "Tuple{TransId=" << tuple.transactionId;
-        out << " InternId=" << tuple.internId << "}";
-        return out;
-    }
-};
-
-//---------------------------------------------------------------------------
 //A structure to keep "stats" for each unique column
 //---------------------------------------------------------------------------
 struct UColFigures {
@@ -204,7 +174,6 @@ struct UColFigures {
 //---------------------------------------------------------------------------
 //Define types
 //---------------------------------------------------------------------------
-typedef boost::container::flat_map<Tuple, vector<uint64_t>> tupleContent_t;
 typedef vector<vector<map<uint64_t, vector<Tuple>> *>> transactionHistory_t;
 typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
 typedef vector<pair<uint32_t, pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
@@ -215,7 +184,7 @@ typedef vector<vector<UColFigures>> uColIndicator_t;
 //---------------------------------------------------------------------------
 extern vector<uint32_t> schema;
 extern vector<map<uint32_t,vector<uint64_t>>> relations;
-extern tupleContent_t * tupleContentPtr[];
+extern TupleCBuffer * tupleContentPtr;
 extern transactionHistory_t * transactionHistoryPtr[];
 extern boost::container::flat_map<uint64_t,bool> queryResults;
 extern mutex mutexQueryResults;
@@ -226,7 +195,7 @@ extern atomic<uint32_t> processingFlushThreadsNb, processingForgetThreadsNb;
 extern condition_variable_any conditionFlush, conditionForget;
 extern mutex mutexFlush, mutexForget;
 extern atomic<bool> referenceOver;
-extern atomic<uint64_t> forgetTransactionId;
+extern atomic<uint64_t> forgetTupleBound;
 
 //---------------------------------------------------------------------------
 // Given an iterator to a Tuple object and a vector of Column, tells if match

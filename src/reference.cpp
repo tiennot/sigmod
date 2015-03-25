@@ -9,7 +9,8 @@ vector<uint32_t> schema;
 vector<map<uint32_t,vector<uint64_t>>> relations;
 
 //Maps tuples to their content (and their relation id)
-tupleContent_t * tupleContentPtr[NB_THREAD];
+TupleCBuffer * tupleContentPtr;
+Tuple currentTuple = 0;
 
 //Maps a relation's column and a value to the tuples that affected it
 transactionHistory_t * transactionHistoryPtr[NB_THREAD];
@@ -32,7 +33,7 @@ atomic<uint32_t> processingFlushThreadsNb(0), processingForgetThreadsNb(0);
 condition_variable_any conditionFlush, conditionForget;
 mutex mutexFlush, mutexForget;
 atomic<bool> referenceOver(false);
-atomic<uint64_t> forgetTransactionId(0);
+atomic<uint64_t> forgetTupleBound(0);
 
 //---------------------------------------------------------------------------
 static void processDefineSchema(const DefineSchema& d)
@@ -63,8 +64,8 @@ static void processDefineSchema(const DefineSchema& d)
 //---------------------------------------------------------------------------
 static void processTransaction(const Transaction& t)
 {
-    //Tuple identifier
-    Tuple tuple{t.transactionId, 0};
+    //Maps transaction with the tuples
+    tupleContentPtr->addTEntry(t.transactionId);
 
     const char* reader=t.operations;
 
@@ -80,12 +81,14 @@ static void processTransaction(const Transaction& t)
             //If the tuple key exists in the relation
             if (relations[o->relationId].count(*key)) {
                 vector<uint64_t>& tupleValues = relations[o->relationId][*key];
+                //Inserts in the tupleValues
+                tupleContentPtr->push_back(tupleValues);
                 //Adds to the tuples to index
-                (*tuplesToIndexPtr[thread]).push_back(pair<uint32_t, pair<Tuple, vector<uint64_t>>>(o->relationId, pair<Tuple, vector<uint64_t>>(tuple, move(tupleValues))));
+                (*tuplesToIndexPtr[thread]).push_back(make_pair(o->relationId, make_pair(currentTuple, move(tupleValues))));
                 //Erase
                 relations[o->relationId].erase(*key);
-                //Increments internId
-                ++tuple.internId;
+                //Increments counter
+                currentTuple++;
             }
         }
         reader+=sizeof(TransactionOperationDelete)+(sizeof(uint64_t)*o->rowCount);
@@ -101,13 +104,15 @@ static void processTransaction(const Transaction& t)
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
             //Adds to the tuples to index
-            tuplesToIndexPtr[thread]->push_back(make_pair(o->relationId, make_pair(tuple, vector<uint64_t>())));
+            tuplesToIndexPtr[thread]->push_back(make_pair(o->relationId, make_pair(currentTuple, vector<uint64_t>())));
             auto * tupleValues = &(tuplesToIndexPtr[thread]->back().second.second);
             tupleValues->insert(tupleValues->begin(),values,values+schema[o->relationId]);
+            //Inserts in the tupleContent
+            tupleContentPtr->push_back(*tupleValues);
             //Inserts
             relations[o->relationId][values[0]] = *tupleValues;
-            //Increments internId
-            ++tuple.internId;
+            //Increments counter
+            currentTuple++;
         }
         reader+=sizeof(TransactionOperationInsert)+(sizeof(uint64_t)*o->rowCount*schema[o->relationId]);
     }
@@ -223,8 +228,11 @@ static void processForget(const Forget& f)
 {
     cerr << "Forget " << f.transactionId << endl;
 
+    //Forget in tupleContent
+    tupleContentPtr->forget(f.transactionId);
+
     //Notifies the Forget threads
-    forgetTransactionId = f.transactionId;
+    forgetTupleBound = tupleContentPtr->getForgetTuple(f.transactionId);
     while(processingForgetThreadsNb!=NB_THREAD){} //Safety while, shoudn't happen
     mutexForget.lock();
     conditionForget.notify_all();
@@ -244,9 +252,9 @@ int main()
     //cerr << "Pause... "; sleep(15); cerr << "Resumes..." << endl;
 
     //Allocates maps
+    tupleContentPtr = new TupleCBuffer(33544432);
     for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
         transactionHistoryPtr[thread] = new transactionHistory_t;
-        tupleContentPtr[thread] = new tupleContent_t;
         queriesToProcessPtr[thread] = new queriesToProcess_t;
         tuplesToIndexPtr[thread] = new tuplesToIndex_t;
         uColIndicatorPtr[thread] = new uColIndicator_t;
@@ -304,11 +312,11 @@ int main()
                 //Desallocates
                 for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
                     delete transactionHistoryPtr[thread];
-                    delete tupleContentPtr[thread];
                     delete queriesToProcessPtr[thread];
                     delete tuplesToIndexPtr[thread];
                     delete uColIndicatorPtr[thread];
                 }
+                delete tupleContentPtr;
                 return 0;
             default:
                 // crude error handling, should never happen

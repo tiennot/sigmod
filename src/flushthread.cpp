@@ -6,7 +6,7 @@
 void FlushThread::launch(){
     //Maps aliases for variables according to thread
     transactionHistory = transactionHistoryPtr[thread];
-    tupleContent = tupleContentPtr[thread];
+    tupleContent = tupleContentPtr;
     queriesToProcess = queriesToProcessPtr[thread];
     tuplesToIndex = tuplesToIndexPtr[thread];
     uColIndicator = uColIndicatorPtr[thread];
@@ -45,7 +45,6 @@ void FlushThread::launch(){
  * Index all the tuples from tuplesToIndex
  */
 void FlushThread::indexTuples(){
-    auto iterTC = tupleContent->begin();
     for(auto iter=tuplesToIndex->begin(), iterEnd=tuplesToIndex->end(); iter!=iterEnd; ++iter){
         auto relationId = iter->first;
         //For each column we add the value to the history
@@ -61,8 +60,6 @@ void FlushThread::indexTuples(){
             //Adds the value to the list
             tupleList->push_back(iter->second.first);
         }
-        //Adds to tupleContent
-        iterTC = tupleContent->insert(iterTC, move(iter->second));
     }
     //Clear the queue of tuples to index
     tuplesToIndex->clear();
@@ -81,8 +78,8 @@ void FlushThread::processQueries(){
         columns = &(back.second.second);
 
         //Bound tuples
-        tFrom.transactionId = v->from;
-        tTo.transactionId = v->to+1;
+        tFrom = tupleContentPtr->getTupleFrom(v->from);
+        tTo = tupleContentPtr->getTupleTo(v->to);
 
         //Retrieves current result
         mutexQueryResults.lock();
@@ -142,7 +139,7 @@ bool FlushThread::processQuery_NoColumn() const{
     //Query conflicts if there is at least one transaction affecting the relation
     for(auto iter: *(*transactionHistory)[q->relationId][0]){
         auto lowerBound = lower_bound(iter.second.begin(), iter.second.end(), tFrom);
-        if(lowerBound!=iter.second.end() && (*lowerBound).transactionId<=v->to){
+        if(lowerBound!=iter.second.end() && (*lowerBound)<tTo){
             return true;
         }
     }
@@ -156,6 +153,7 @@ bool FlushThread::processQuery_OneEqualOnly() const{
     auto filterPredic = &((*columns)[0]);
     auto map = (*transactionHistory)[q->relationId][filterPredic->column];
     auto tupleList = map->find(filterPredic->value);
+
     if(tupleList!= map->end()){
         auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
         auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
@@ -191,7 +189,7 @@ bool FlushThread::processQuery_WithEqualColumns() const{
     auto iterFrom = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
     auto iterTo = lower_bound(iterFrom, tupleList->end(), tTo);
     for(auto iter=iterFrom; iter!=iterTo; ++iter){
-        auto& tupleValues = (*tupleContent)[*iter];
+        auto& tupleValues = tupleContent->at(*iter);
         if(tupleMatch(tupleValues, columns)){
             return true;
         }
@@ -243,7 +241,7 @@ bool FlushThread::processQuery_WithNoEqualColumns() const{
             auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
             //Loops through tuples and checks them
             for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
-                auto& tupleValues = (*tupleContent)[*iter2];
+                auto& tupleValues = tupleContent->at(*iter2);
                 if(tupleMatch(tupleValues, columns)==true){
                     return true;
                 }

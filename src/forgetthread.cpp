@@ -3,7 +3,7 @@
 void ForgetThread::launch(){
     //Aliases
     transactionHistory = transactionHistoryPtr[thread];
-    tupleContent = tupleContentPtr[thread];
+    tupleContent = tupleContentPtr;
 
     mutexForget.lock();
     while(true){
@@ -35,7 +35,7 @@ void ForgetThread::launch(){
 }
 
 void ForgetThread::processForget(){
-    Tuple bound{forgetTransactionId, 0};
+    Tuple bound = forgetTupleBound;
     for(auto iterRel=transactionHistory->begin(); iterRel!=transactionHistory->end(); ++iterRel){
         for(auto iterCol=iterRel->begin(); iterCol!=iterRel->end(); ++iterCol){
             auto map = *iterCol;
@@ -54,5 +54,4 @@ void ForgetThread::processForget(){
         }
     }
     //Erase from tupleContent
-    tupleContent->erase(tupleContent->begin(), tupleContent->lower_bound(bound));
 }

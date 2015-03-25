@@ -20,7 +20,7 @@ private:
     uint32_t thread;
     //Aliases
     transactionHistory_t * transactionHistory;
-    tupleContent_t * tupleContent;
+    TupleCBuffer * tupleContent;
     queriesToProcess_t * queriesToProcess;
     tuplesToIndex_t * tuplesToIndex;
     uColIndicator_t * uColIndicator;
@@ -38,8 +38,8 @@ private:
     Query * q;
     vector<Query::Column> * columns;
     bool foundSomeone;
-    Tuple tFrom{0,0};
-    Tuple tTo{0,0};
+    Tuple tFrom = 0;
+    Tuple tTo = 0;
     vector<Query::Column*>  eCol;
 };
 
