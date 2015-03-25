@@ -83,7 +83,6 @@ void FlushThread::processQueries(){
 
         //Retrieves current result
         mutexQueryResults.lock();
-        if(!queryResults.count(v->validationId)) queryResults[v->validationId]=false;
         bool currentResult = queryResults[v->validationId]==true;
         mutexQueryResults.unlock();
 

@@ -191,9 +191,10 @@ static void processValidationQueries(const ValidationQueries& v)
             vector<Query::Column> * vCol = &(queriesToProcessPtr[thread]->back().second.second);
             vCol->resize(q.columnCount);
             memmove(vCol->data(), &(q.columns), (sizeof(Query::Column)*q.columnCount));
-        }else{
-            queryResults[v.validationId] = false;
         }
+
+        //Marks as false by default
+        queryResults[v.validationId]=false;
 
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*q.columnCount);
