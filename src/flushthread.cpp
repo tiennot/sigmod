@@ -234,16 +234,14 @@ bool FlushThread::processQuery_WithNoEqualColumns() const{
         //The not equal special case
         if(notEqualCase && iter->first==filterPredic->value) continue;
 
-        auto tupleList = map->find(iter->first);
-        if(tupleList!=map->end()){
-            auto tupleFrom = lower_bound(tupleList->second.begin(), tupleList->second.end(), tFrom);
-            auto tupleTo = lower_bound(tupleFrom, tupleList->second.end(), tTo);
-            //Loops through tuples and checks them
-            for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
-                auto& tupleValues = tupleContent->at(*iter2);
-                if(tupleMatch(tupleValues, columns)==true){
-                    return true;
-                }
+        auto * tupleList = &(iter->second);
+        auto tupleFrom = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
+        auto tupleTo = lower_bound(tupleFrom, tupleList->end(), tTo);
+        //Loops through tuples and checks them
+        for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
+            auto& tupleValues = tupleContent->at(*iter2);
+            if(tupleMatch(tupleValues, columns)==true){
+                return true;
             }
         }
     }
