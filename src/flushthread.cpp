@@ -167,7 +167,7 @@ bool FlushThread::processQuery_OneEqualOnly() const{
  * Process the query when there is at least one == predicate
  */
 bool FlushThread::processQuery_WithEqualColumns() const{
-    vector<Tuple> * tupleList;
+    vector<Tuple> * tupleList = NULL;
     uint32_t nbTuples = UINT32_MAX;
 
     for(uint32_t i=0; i!=eCol.size(); ++i){
@@ -177,6 +177,7 @@ bool FlushThread::processQuery_WithEqualColumns() const{
             if(tupleListCandidate->second.size()<nbTuples){
                 tupleList = &(tupleListCandidate->second);
                 nbTuples = tupleList->size();
+                if(nbTuples<128) break;
             }
         }else{
             //Empty list, returns
