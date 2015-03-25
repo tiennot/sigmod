@@ -189,8 +189,7 @@ static void processValidationQueries(const ValidationQueries& v)
             queriesToProcessPtr[thread]->push_back(make_pair(v, make_pair(q, vector<Query::Column>())));
             //Adds the columns
             vector<Query::Column> * vCol = &(queriesToProcessPtr[thread]->back().second.second);
-            vCol->resize(q.columnCount);
-            memmove(vCol->data(), &(q.columns), (sizeof(Query::Column)*q.columnCount));
+            vCol->assign(q.columns, q.columns+q.columnCount);
         }
 
         //Offsets reader
