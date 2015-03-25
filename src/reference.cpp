@@ -15,8 +15,8 @@ Tuple currentTuple = 0;
 //Maps a relation's column and a value to the tuples that affected it
 transactionHistory_t * transactionHistoryPtr[NB_THREAD];
 
-//Stores the booleans for output + mutex
-boost::container::flat_map<uint64_t,bool> queryResults;
+//Stores the booleans for output & last echoed validation + mutex
+pair<vector<bool>, uint64_t> queryResults;
 mutex mutexQueryResults;
 
 //Lists of (validationQuery, (query, columns)) to be processed by each flush thread
@@ -193,12 +193,12 @@ static void processValidationQueries(const ValidationQueries& v)
             memmove(vCol->data(), &(q.columns), (sizeof(Query::Column)*q.columnCount));
         }
 
-        //Marks as false by default
-        queryResults[v.validationId]=false;
-
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*q.columnCount);
     }
+
+    //Marks as false by default
+    queryResults.first.push_back(false);
 }
 //---------------------------------------------------------------------------
 static void processFlush(const Flush& f)
@@ -213,13 +213,11 @@ static void processFlush(const Flush& f)
     mutexFlush.unlock();
 
     //Outputs all the queryResults available
-    mutexQueryResults.lock();
-    while ((!queryResults.empty())&&((*queryResults.begin()).first<=f.validationId)) {
-        char c='0'+(*queryResults.begin()).second;
+    for(uint64_t vId=queryResults.second; vId!=f.validationId+1; ++vId) {
+        char c='0' + queryResults.first[vId];
         cout.write(&c,1);
-        queryResults.erase(queryResults.begin());
     }
-    mutexQueryResults.unlock();
+    queryResults.second = f.validationId+1;
 
     //Flush output
     cout.flush();

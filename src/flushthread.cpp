@@ -83,7 +83,7 @@ void FlushThread::processQueries(){
 
         //Retrieves current result
         mutexQueryResults.lock();
-        bool currentResult = queryResults[v->validationId]==true;
+        bool currentResult = queryResults.first[v->validationId]==true;
         mutexQueryResults.unlock();
 
         //Handles query only if current result is false
@@ -121,7 +121,7 @@ void FlushThread::processQueries(){
             //Updates result if needed
             if(foundSomeone){
                 mutexQueryResults.lock();
-                queryResults[v->validationId]=true;
+                queryResults.first[v->validationId]=true;
                 mutexQueryResults.unlock();
             }
         }

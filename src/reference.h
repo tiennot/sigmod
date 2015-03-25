@@ -186,7 +186,7 @@ extern vector<uint32_t> schema;
 extern vector<map<uint32_t,vector<uint64_t>>> relations;
 extern TupleCBuffer * tupleContentPtr;
 extern transactionHistory_t * transactionHistoryPtr[];
-extern boost::container::flat_map<uint64_t,bool> queryResults;
+extern pair<vector<bool>, uint64_t> queryResults;
 extern mutex mutexQueryResults;
 extern queriesToProcess_t * queriesToProcessPtr[];
 extern tuplesToIndex_t * tuplesToIndexPtr[];
