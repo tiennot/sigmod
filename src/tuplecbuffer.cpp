@@ -2,15 +2,12 @@
 
 //In case capacity is not enough
 void TupleCBuffer::reallocate(){
-    cerr << "##########Reallocate" << endl;
     //Reallocate with double capacity
     vector<vector<uint64_t>> * newContainer = new vector<vector<uint64_t>>;
     newContainer->resize(capacity*2);
     //TODO: vraiment pas optimal
     for(Tuple t=firstTuple; t!=firstTuple+size; ++t){
-        memmove(newContainer->data()+(t%2*capacity)*sizeof(vector<uint64_t>),
-                container->data()+(t%capacity)*sizeof(vector<uint64_t>)*sizeof(Tuple),
-                sizeof(vector<uint64_t>));
+        (*newContainer)[t%(capacity*2)] = move((*container)[t%capacity]);
     }
     delete container;
     container = newContainer;
