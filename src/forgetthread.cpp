@@ -38,20 +38,25 @@ void ForgetThread::processForget(){
     Tuple bound = forgetTupleBound;
     for(auto iterRel=transactionHistory->begin(); iterRel!=transactionHistory->end(); ++iterRel){
         for(auto iterCol=iterRel->begin(); iterCol!=iterRel->end(); ++iterCol){
-            auto map = *iterCol;
+            auto map = iterCol->first;
+            auto mapVector = iterCol->second;
+            mapVector->clear();
+            uint32_t nbPairErased = 0;
             for(auto iterMap=map->begin(); iterMap!=map->end();){
                 vector<Tuple> * tuples = &(iterMap->second);
                 auto lwrBound = lower_bound(tuples->begin(), tuples->end(), bound);
                 if(lwrBound!=tuples->end()){
                     tuples->erase(tuples->begin(), lwrBound);
+                    mapVector->push_back(iterMap->first);
                     ++iterMap;
                 }else{
                     auto toErase = iterMap;
                     ++iterMap;
+                    //Erase the pair in the map
                     map->erase(toErase);
+                    nbPairErased++;
                 }
             }
         }
     }
-    //Erase from tupleContent
 }

@@ -57,7 +57,10 @@ static void processDefineSchema(const DefineSchema& d)
         (*transactionHistoryPtr[thread])[i].resize(schema[i]);
         (*uColIndicatorPtr[thread])[i].resize(schema[i]);
         for(uint32_t j=0; j!=schema[i]; ++j){
-            (*transactionHistoryPtr[thread])[i][j] = new map<uint64_t, vector<Tuple>>;
+            //A map that keeps the tuples for each value
+            (*transactionHistoryPtr[thread])[i][j].first = new unordered_map<uint64_t, vector<Tuple>>;
+            //A vector, sorted and used when only <, >, <=, >=
+            (*transactionHistoryPtr[thread])[i][j].second = new vector<uint64_t>;
         }
     }
 }
@@ -79,12 +82,13 @@ static void processTransaction(const Transaction& t)
         //Loops through the tuples to delete
         for (const uint64_t* key=o->keys,*keyLimit=key+o->rowCount;key!=keyLimit;++key) {
             //If the tuple key exists in the relation
-            if (relations[o->relationId].count(*key)) {
-                vector<uint64_t>& tupleValues = relations[o->relationId][*key];
+            auto find = relations[o->relationId].find(*key);
+            if (find!=relations[o->relationId].end()) {
+                vector<uint64_t> * tupleValues = &(find->second);
                 //Inserts in the tupleValues
-                tupleContentPtr->push_back(tupleValues);
+                tupleContentPtr->push_back(*tupleValues);
                 //Adds to the tuples to index
-                (*tuplesToIndexPtr[thread]).push_back(make_pair(o->relationId, make_pair(currentTuple, move(tupleValues))));
+                (*tuplesToIndexPtr[thread]).push_back(make_pair(o->relationId, make_pair(currentTuple, move(*tupleValues))));
                 //Erase
                 relations[o->relationId].erase(*key);
                 //Increments counter
@@ -304,7 +308,8 @@ int main()
                 for(uint32_t i=0; i!=schema.size(); ++i){
                     auto thread = assignedThread(i);
                     for(uint32_t j=0; j!=schema[i]; ++j){
-                        delete (*(transactionHistoryPtr[thread]))[i][j];
+                        delete (*(transactionHistoryPtr[thread]))[i][j].first;
+                        delete (*(transactionHistoryPtr[thread]))[i][j].second;
                     }
                 }
                 //Desallocates

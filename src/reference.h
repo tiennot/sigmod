@@ -33,6 +33,7 @@
 
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <chrono>
 #include <set>
@@ -174,7 +175,7 @@ struct UColFigures {
 //---------------------------------------------------------------------------
 //Define types
 //---------------------------------------------------------------------------
-typedef vector<vector<map<uint64_t, vector<Tuple>> *>> transactionHistory_t;
+typedef vector<vector<pair<unordered_map<uint64_t, vector<Tuple>> *, vector<uint64_t> *>>> transactionHistory_t;
 typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
 typedef vector<pair<uint32_t, pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
 typedef vector<vector<UColFigures>> uColIndicator_t;
