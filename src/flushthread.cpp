@@ -58,8 +58,10 @@ void FlushThread::indexTuples(){
             if(value < uColFigures->minValue) uColFigures->minValue = value;
             if(tupleList->empty()){
                 ++uColFigures->nbOfValues;
-                //Adds the value to the set
-                mapSetPair->second->push_back(value);
+                //Adds the value to the vector
+                mapSetPair->second->first.push_back(value);
+                //Marks the vector as non-sorted
+                mapSetPair->second->second = false;
             }
             ++uColFigures->nbOfTuples;
             //Adds the value to the list
@@ -220,8 +222,13 @@ bool FlushThread::processQuery_WithNoEqualColumns() const{
     if(filterPredic==NULL) filterPredic = &((*columns)[0]);
 
     auto map = (*transactionHistory)[q->relationId][filterPredic->column].first;
-    auto vector = (*transactionHistory)[q->relationId][filterPredic->column].second;
-    std::sort(vector->begin(), vector->end());
+    auto * vecAndBool = (*transactionHistory)[q->relationId][filterPredic->column].second;
+    auto * vector = &(vecAndBool->first);
+
+    if(vecAndBool->second == false){
+        std::sort(vector->begin(), vector->end());
+        vecAndBool->second = true;
+    }
 
     //Restricts the values to explore thanks to the set associated to the map
     const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;

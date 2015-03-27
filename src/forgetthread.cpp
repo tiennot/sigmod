@@ -39,7 +39,8 @@ void ForgetThread::processForget(){
     for(auto iterRel=transactionHistory->begin(); iterRel!=transactionHistory->end(); ++iterRel){
         for(auto iterCol=iterRel->begin(); iterCol!=iterRel->end(); ++iterCol){
             auto map = iterCol->first;
-            auto mapVector = iterCol->second;
+            iterCol->second->second = false;
+            auto mapVector = &(iterCol->second->first);
             mapVector->clear();
             uint32_t nbPairErased = 0;
             for(auto iterMap=map->begin(); iterMap!=map->end();){
