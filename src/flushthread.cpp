@@ -50,8 +50,8 @@ void FlushThread::indexTuples(){
         //For each column we add the value to the history
         for(uint32_t col=0, nbCol=iter->second.second.size(); col!=nbCol; ++col){
             uint64_t value = iter->second.second[col];
-            auto * mapSetPair = &(*transactionHistory)[relationId][col];
-            auto * tupleList = &((*(mapSetPair->first))[value]);
+            auto * mapVectorPair = &(*transactionHistory)[relationId][col];
+            auto * tupleList = &((*(mapVectorPair->first))[value]);
             //Updates stats
             UColFigures  * uColFigures = &((*uColIndicator)[relationId][col]);
             if(value > uColFigures->maxValue) uColFigures->maxValue = value;
@@ -59,9 +59,7 @@ void FlushThread::indexTuples(){
             if(tupleList->empty()){
                 ++uColFigures->nbOfValues;
                 //Adds the value to the vector
-                mapSetPair->second->first.push_back(value);
-                //Marks the vector as non-sorted
-                mapSetPair->second->second = false;
+                mapVectorPair->second->push_back(value);
             }
             ++uColFigures->nbOfTuples;
             //Adds the value to the list
@@ -208,7 +206,7 @@ bool FlushThread::processQuery_WithEqualColumns() const{
  * Process the query when there is no == predicate
  */
 bool FlushThread::processQuery_WithNoEqualColumns() const{
-    //We will iterate in the relevant values
+    //Selects the right predicate
     Query::Column * filterPredic = NULL;
     uint64_t estimatedNbOfTuples = UINT64_MAX;
     for(auto pIter=columns->begin(); pIter!=columns->end(); ++pIter){
@@ -221,44 +219,50 @@ bool FlushThread::processQuery_WithNoEqualColumns() const{
     }
     if(filterPredic==NULL) filterPredic = &((*columns)[0]);
 
+    //Gets the map and the vector associated
     auto map = (*transactionHistory)[q->relationId][filterPredic->column].first;
-    auto * vecAndBool = (*transactionHistory)[q->relationId][filterPredic->column].second;
-    auto * vector = &(vecAndBool->first);
-
-    if(vecAndBool->second == false){
-        std::sort(vector->begin(), vector->end());
-        vecAndBool->second = true;
-    }
-
-    //Restricts the values to explore thanks to the set associated to the map
-    const bool notEqualCase = filterPredic->op==Query::Column::NotEqual;
+    auto * vector = (*transactionHistory)[q->relationId][filterPredic->column].second;
     auto vectorStart = vector->begin();
     auto vectorEnd = vector->end();
 
     if(filterPredic->op==Query::Column::Greater){
-        vectorStart = upper_bound(vector->begin(), vector->end(), filterPredic->value);
+        for(auto iter=vectorStart; iter!=vectorEnd; ++iter){
+            if(*iter <= filterPredic->value) continue;
+            if(testMapForValue(map, columns, *iter)) return true;
+        }
     }else if(filterPredic->op==Query::Column::GreaterOrEqual){
-        vectorStart = lower_bound(vector->begin(), vector->end(), filterPredic->value);
+        for(auto iter=vectorStart; iter!=vectorEnd; ++iter){
+            if(*iter < filterPredic->value) continue;
+            if(testMapForValue(map, columns, *iter)) return true;
+        }
     }else if(filterPredic->op==Query::Column::Less){
-        vectorEnd = lower_bound(vector->begin(), vector->end(), filterPredic->value);
+        for(auto iter=vectorStart; iter!=vectorEnd; ++iter){
+            if(*iter >= filterPredic->value) continue;
+            if(testMapForValue(map, columns, *iter)) return true;
+        }
     }else if(filterPredic->op==Query::Column::LessOrEqual){
-        vectorEnd = upper_bound(vector->begin(), vector->end(), filterPredic->value);
+        for(auto iter=vectorStart; iter!=vectorEnd; ++iter){
+            if(*iter > filterPredic->value) continue;
+            if(testMapForValue(map, columns, *iter)) return true;
+        }
+    }else{
+        for(auto iter=vectorStart; iter!=vectorEnd; ++iter){
+            if(*iter == filterPredic->value) continue;
+            if(testMapForValue(map, columns, *iter)) return true;
+        }
     }
+    return false;
+}
 
-    //Iterates through the values
-    for(auto iter=vectorStart; iter!=vectorEnd;++iter){
-        //The not equal special case
-        if(notEqualCase && *iter==filterPredic->value) continue;
-
-        auto * tupleList = &(map->find(*iter)->second);
-        auto tupleFrom = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
-        auto tupleTo = lower_bound(tupleFrom, tupleList->end(), tTo);
-        //Loops through tuples and checks them
-        for(auto iter2=tupleFrom; iter2!=tupleTo; ++iter2){
-            auto& tupleValues = tupleContent->at(*iter2);
-            if(tupleMatch(tupleValues, columns)==true){
-                return true;
-            }
+//Test a map for a given value
+bool FlushThread::testMapForValue(unordered_map<uint64_t, vector<uint64_t>> * map, vector<Query::Column> * columns, const uint64_t &value) const{
+    auto * tupleList = &(map->find(value)->second);
+    auto tupleFrom = lower_bound(tupleList->begin(), tupleList->end(), tFrom);
+    auto tupleTo = lower_bound(tupleFrom, tupleList->end(), tTo);
+    for(auto iter=tupleFrom; iter!=tupleTo; ++iter){
+        auto& tupleValues = tupleContent->at(*iter);
+        if(tupleMatch(tupleValues, columns)==true){
+            return true;
         }
     }
     return false;

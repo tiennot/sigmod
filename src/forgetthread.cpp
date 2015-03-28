@@ -39,10 +39,8 @@ void ForgetThread::processForget(){
     for(auto iterRel=transactionHistory->begin(); iterRel!=transactionHistory->end(); ++iterRel){
         for(auto iterCol=iterRel->begin(); iterCol!=iterRel->end(); ++iterCol){
             auto map = iterCol->first;
-            iterCol->second->second = false;
-            auto mapVector = &(iterCol->second->first);
+            auto * mapVector = iterCol->second;
             mapVector->clear();
-            uint32_t nbPairErased = 0;
             for(auto iterMap=map->begin(); iterMap!=map->end();){
                 vector<Tuple> * tuples = &(iterMap->second);
                 auto lwrBound = lower_bound(tuples->begin(), tuples->end(), bound);
@@ -55,7 +53,6 @@ void ForgetThread::processForget(){
                     ++iterMap;
                     //Erase the pair in the map
                     map->erase(toErase);
-                    nbPairErased++;
                 }
             }
         }

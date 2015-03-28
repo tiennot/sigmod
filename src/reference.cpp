@@ -59,9 +59,8 @@ static void processDefineSchema(const DefineSchema& d)
         for(uint32_t j=0; j!=schema[i]; ++j){
             //A map that keeps the tuples for each value
             (*transactionHistoryPtr[thread])[i][j].first = new unordered_map<uint64_t, vector<Tuple>>;
-            //A vector, sorted and used when only <, >, <=, >=
-            (*transactionHistoryPtr[thread])[i][j].second = new pair<vector<uint64_t>, bool>;
-            (*transactionHistoryPtr[thread])[i][j].second->second = false;
+            //A vector, used when only <, >, <=, >=
+            (*transactionHistoryPtr[thread])[i][j].second = new vector<uint64_t>;
         }
     }
 }

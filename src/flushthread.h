@@ -33,6 +33,7 @@ private:
     bool processQuery_OneEqualOnly() const;
     bool processQuery_WithEqualColumns() const;
     bool processQuery_WithNoEqualColumns() const;
+    bool testMapForValue(unordered_map<uint64_t, vector<uint64_t>> * map, vector<Query::Column> * columns, const uint64_t &value) const;
     //Attributes for query processing
     ValidationQueries * v;
     Query * q;
