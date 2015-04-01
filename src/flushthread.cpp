@@ -11,23 +11,19 @@ void FlushThread::launch(){
     tuplesToIndex = tuplesToIndexPtr[thread];
     uColIndicator = uColIndicatorPtr[thread];
 
-    mutexFlush.lock();
     while(true){
-        //Waits for the signal from main thread
-        processingFlushThreadsNb++;
-        conditionFlush.wait(mutexFlush);
-        mutexFlush.unlock();
-
-        if(referenceOver) break;
-
         //Indexes
         indexTuples();
+
         //Processes
         processQueries();
 
+        if(referenceOver) break;
+
         //When done processing decrements processingThreadNb
         if(--processingFlushThreadsNb==0){
-            //Signals main thread
+            processingFlushThreadsNb = NB_THREAD;
+            //Signals main thread and fellows
             mutexFlush.lock();
             conditionFlush.notify_all();
             mutexFlush.unlock();
@@ -35,6 +31,7 @@ void FlushThread::launch(){
             //waits for the releaser thread
             mutexFlush.lock();
             conditionFlush.wait(mutexFlush);
+            mutexFlush.unlock();
         }
     }
 
@@ -45,11 +42,12 @@ void FlushThread::launch(){
  * Index all the tuples from tuplesToIndex
  */
 void FlushThread::indexTuples(){
-    for(auto iter=tuplesToIndex->begin(), iterEnd=tuplesToIndex->end(); iter!=iterEnd; ++iter){
-        auto relationId = iter->first;
+    while(tuplesToIndex->waitForItem()){
+        auto * item = tuplesToIndex->front();
+        auto relationId = item->first;
         //For each column we add the value to the history
-        for(uint32_t col=0, nbCol=iter->second.second.size(); col!=nbCol; ++col){
-            uint64_t value = iter->second.second[col];
+        for(uint32_t col=0, nbCol=item->second.second.size(); col!=nbCol; ++col){
+            uint64_t value = item->second.second[col];
             auto * mapVectorPair = &(*transactionHistory)[relationId][col];
             auto * tupleList = &((*(mapVectorPair->first))[value]);
             //Updates stats
@@ -63,11 +61,11 @@ void FlushThread::indexTuples(){
             }
             ++uColFigures->nbOfTuples;
             //Adds the value to the list
-            tupleList->push_back(iter->second.first);
+            tupleList->push_back(item->second.first);
         }
+        //Pops
+        tuplesToIndex->pop();
     }
-    //Clear the queue of tuples to index
-    tuplesToIndex->clear();
 }
 
 /*

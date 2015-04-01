@@ -29,7 +29,7 @@ tuplesToIndex_t * tuplesToIndexPtr[NB_THREAD];
 uColIndicator_t * uColIndicatorPtr[NB_THREAD];
 
 //Stuff for synchronization
-atomic<uint32_t> processingFlushThreadsNb(0), processingForgetThreadsNb(0);
+atomic<uint32_t> processingFlushThreadsNb(NB_THREAD), processingForgetThreadsNb(0);
 condition_variable_any conditionFlush, conditionForget;
 mutex mutexFlush, mutexForget;
 atomic<bool> referenceOver(false);
@@ -88,7 +88,7 @@ static void processTransaction(const Transaction& t)
                 //Inserts in the tupleValues
                 tupleContentPtr->push_back(*tupleValues);
                 //Adds to the tuples to index
-                (*tuplesToIndexPtr[thread]).push_back(make_pair(o->relationId, make_pair(currentTuple, move(*tupleValues))));
+                (*tuplesToIndexPtr[thread]).push(make_pair(o->relationId, make_pair(currentTuple, move(*tupleValues))));
                 //Erase
                 relations[o->relationId].erase(*key);
                 //Increments counter
@@ -108,13 +108,13 @@ static void processTransaction(const Transaction& t)
         //Loops through the tuples to insert
         for (const uint64_t* values=o->values,*valuesLimit=values+(o->rowCount*schema[o->relationId]);values!=valuesLimit;values+=schema[o->relationId]) {
             //Adds to the tuples to index
-            tuplesToIndexPtr[thread]->push_back(make_pair(o->relationId, make_pair(currentTuple, vector<uint64_t>())));
-            auto * tupleValues = &(tuplesToIndexPtr[thread]->back().second.second);
-            tupleValues->insert(tupleValues->begin(),values,values+schema[o->relationId]);
+            vector<uint64_t> tupleValues;
+            tupleValues.insert(tupleValues.begin(),values,values+schema[o->relationId]);
+            tuplesToIndexPtr[thread]->push(make_pair(o->relationId, make_pair(currentTuple, tupleValues)));
             //Inserts in the tupleContent
-            tupleContentPtr->push_back(*tupleValues);
+            tupleContentPtr->push_back(tupleValues);
             //Inserts
-            relations[o->relationId][values[0]] = *tupleValues;
+            relations[o->relationId][values[0]] = move(tupleValues);
             //Increments counter
             currentTuple++;
         }
@@ -208,10 +208,13 @@ static void processFlush(const Flush& f)
 {
     cerr << "Flush " << f.validationId << endl;
 
-    //Notifies the flush threads
-    while(processingFlushThreadsNb!=NB_THREAD){} //Safety while, shoudn't happen
     mutexFlush.lock();
-    conditionFlush.notify_all();
+
+    //Tells consumer threads that we are done
+    for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
+        tuplesToIndexPtr[thread]->signalProducerDone();
+    }
+    //Waits for flush threads to be done
     conditionFlush.wait(mutexFlush);
     mutexFlush.unlock();
 
@@ -229,6 +232,19 @@ static void processFlush(const Flush& f)
 static void processForget(const Forget& f)
 {
     cerr << "Forget " << f.transactionId << endl;
+
+    /*
+     * Forget thread needs to make sure indexing is not ongoing
+     */
+    mutexFlush.lock();
+    //Tells consumer threads that we are done
+    for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
+        tuplesToIndexPtr[thread]->signalProducerDone();
+    }
+    //Waits for flush threads to be done
+    conditionFlush.wait(mutexFlush);
+    mutexFlush.unlock();
+
 
     //Forget in tupleContent
     tupleContentPtr->forget(f.transactionId);
@@ -258,7 +274,7 @@ int main()
     for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
         transactionHistoryPtr[thread] = new transactionHistory_t;
         queriesToProcessPtr[thread] = new queriesToProcess_t;
-        tuplesToIndexPtr[thread] = new tuplesToIndex_t;
+        tuplesToIndexPtr[thread] = new tuplesToIndex_t(262144);
         uColIndicatorPtr[thread] = new uColIndicator_t;
     }
 

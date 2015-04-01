@@ -46,8 +46,8 @@
 #include <condition_variable>
 #include <unistd.h>
 #include <string.h>
-#include <boost/container/flat_map.hpp>
 #include "tuplecbuffer.h"
+#include "pcqueue.h"
 
 #define NB_THREAD 8
 
@@ -177,7 +177,7 @@ struct UColFigures {
 //---------------------------------------------------------------------------
 typedef vector<vector<pair<unordered_map<uint64_t, vector<Tuple>> *, vector<uint64_t> * >>> transactionHistory_t;
 typedef vector<pair<ValidationQueries, pair<Query, vector<Query::Column>>>> queriesToProcess_t;
-typedef vector<pair<uint32_t, pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
+typedef PCQueue<pair<uint32_t, pair<Tuple, vector<uint64_t>>>> tuplesToIndex_t;
 typedef vector<vector<UColFigures>> uColIndicator_t;
 
 //---------------------------------------------------------------------------
