@@ -184,7 +184,7 @@ typedef vector<vector<UColFigures>> uColIndicator_t;
 //Extern declarations
 //---------------------------------------------------------------------------
 extern vector<uint32_t> schema;
-extern vector<map<uint32_t,vector<uint64_t>>> relations;
+extern vector<unordered_map<uint32_t,vector<uint64_t>>> relations;
 extern TupleCBuffer * tupleContentPtr;
 extern transactionHistory_t * transactionHistoryPtr[];
 extern pair<vector<bool>, uint64_t> queryResults;

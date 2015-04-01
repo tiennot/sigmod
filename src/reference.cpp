@@ -6,7 +6,7 @@
 vector<uint32_t> schema;
 
 //Stores the content of the relations (i.e. tuples)
-vector<map<uint32_t,vector<uint64_t>>> relations;
+vector<unordered_map<uint32_t,vector<uint64_t>>> relations;
 
 //Maps tuples to their content (and their relation id)
 TupleCBuffer * tupleContentPtr;
