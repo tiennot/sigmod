@@ -128,73 +128,12 @@ static void processValidationQueries(const ValidationQueries& v)
     for (unsigned index=0;index!=v.queryCount;++index) {
         auto& q=*reinterpret_cast<const Query*>(reader);
 
-        //Counts predicates
-        uint32_t nbPredicPerCol[schema[q.relationId]] = {0};
-        for (auto c=q.columns,cLimit=c+q.columnCount;c!=cLimit;++c){
-            ++nbPredicPerCol[c->column];
-        }
-
-        //Prevents "useless" queries from being added to the processing queue
-        bool notToBePushed = false;
-        for(uint32_t i=0; i<schema[q.relationId]; ++i){
-            if(nbPredicPerCol[i]>1){
-                const Query::Column::Op * op = NULL;
-                uint64_t value = 0;
-                for (auto c=q.columns,cLimit=c+q.columnCount;c!=cLimit;++c){
-                    if(c->column != i) continue;
-                    if(op==NULL){
-                        op = &(c->op);
-                        value = c->value;
-                    }else{
-                        auto op2 = c->op;
-                        switch(*op){
-                            case Query::Column::Equal:
-                                if(op2==Query::Column::Equal) notToBePushed = c->value!=value;
-                                else if(op2==Query::Column::Greater) notToBePushed = c->value>=value;
-                                else if(op2==Query::Column::GreaterOrEqual) notToBePushed = c->value>value;
-                                else if(op2==Query::Column::Less) notToBePushed = c->value<=value;
-                                else if(op2==Query::Column::LessOrEqual) notToBePushed = c->value<value;
-                                else if(op2==Query::Column::NotEqual) notToBePushed = c->value==value;
-                                break;
-                            case Query::Column::Greater:
-                                if(op2==Query::Column::Equal) notToBePushed = c->value<=value;
-                                else if(op2==Query::Column::Less) notToBePushed = c->value<=value;
-                                else if(op2==Query::Column::LessOrEqual) notToBePushed = c->value<=value;
-                                break;
-                            case Query::Column::GreaterOrEqual:
-                                if(op2==Query::Column::Equal) notToBePushed = c->value<value;
-                                else if(op2==Query::Column::Less) notToBePushed = c->value<=value;
-                                else if(op2==Query::Column::LessOrEqual) notToBePushed = c->value<value;
-                                break;
-                            case Query::Column::Less:
-                                if(op2==Query::Column::Equal) notToBePushed = c->value>=value;
-                                else if(op2==Query::Column::Greater) notToBePushed = c->value>=value;
-                                else if(op2==Query::Column::GreaterOrEqual) notToBePushed = c->value>=value;
-                                break;
-                            case Query::Column::LessOrEqual:
-                                if(op2==Query::Column::Equal) notToBePushed = c->value>value;
-                                else if(op2==Query::Column::Greater) notToBePushed = c->value>=value;
-                                else if(op2==Query::Column::GreaterOrEqual) notToBePushed = c->value>value;
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-                    if(notToBePushed) break;
-                }
-                if(notToBePushed) break;
-            }
-        }
-
         //Adds query to the list to process by the relevant thread
-        if(!notToBePushed){
-            //Push
-            auto thread = assignedThread(q.relationId);
-            queriesToProcessPtr[thread]->push_back(make_pair(v, make_pair(q, vector<Query::Column>())));
-            //Adds the columns
-            vector<Query::Column> * vCol = &(queriesToProcessPtr[thread]->back().second.second);
-            vCol->assign(q.columns, q.columns+q.columnCount);
-        }
+        auto thread = assignedThread(q.relationId);
+        queriesToProcessPtr[thread]->push_back(make_pair(v, make_pair(q, vector<Query::Column>())));
+        //Adds the columns
+        vector<Query::Column> * vCol = &(queriesToProcessPtr[thread]->back().second.second);
+        vCol->assign(q.columns, q.columns+q.columnCount);
 
         //Offsets reader
         reader+=sizeof(Query)+(sizeof(Query::Column)*q.columnCount);
