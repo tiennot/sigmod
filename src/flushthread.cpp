@@ -20,16 +20,15 @@ void FlushThread::launch(){
 
         if(referenceOver) break;
 
+        mutexFlush.lock();
         //When done processing decrements processingThreadNb
         if(--processingFlushThreadsNb==0){
             processingFlushThreadsNb = NB_THREAD;
             //Signals main thread and fellows
-            mutexFlush.lock();
             conditionFlush.notify_all();
             mutexFlush.unlock();
         }else{
             //waits for the releaser thread
-            mutexFlush.lock();
             conditionFlush.wait(mutexFlush);
             mutexFlush.unlock();
         }

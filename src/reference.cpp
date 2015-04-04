@@ -213,7 +213,7 @@ int main()
     for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
         transactionHistoryPtr[thread] = new transactionHistory_t;
         queriesToProcessPtr[thread] = new queriesToProcess_t;
-        tuplesToIndexPtr[thread] = new tuplesToIndex_t(262144);
+        tuplesToIndexPtr[thread] = new tuplesToIndex_t(33544432/NB_THREAD);
         uColIndicatorPtr[thread] = new uColIndicator_t;
     }
 
