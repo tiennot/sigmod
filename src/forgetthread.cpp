@@ -1,10 +1,6 @@
 #include "forgetthread.h"
 
 void ForgetThread::launch(){
-    //Aliases
-    transactionHistory = transactionHistoryPtr[thread];
-    tupleContent = tupleContentPtr;
-
     mutexForget.lock();
     while(true){
         //Waits for the signal from main thread
@@ -36,8 +32,10 @@ void ForgetThread::launch(){
 
 void ForgetThread::processForget(){
     Tuple bound = forgetTupleBound;
-    for(auto iterRel=transactionHistory->begin(); iterRel!=transactionHistory->end(); ++iterRel){
-        for(auto iterCol=iterRel->begin(); iterCol!=iterRel->end(); ++iterCol){
+    for(uint32_t rel=0; rel!=schema.size(); ++rel){
+        if(assignedThread(rel)!=thread) continue;
+        auto * colMaps = &(*transactionHistoryPtr)[rel];
+        for(auto iterCol=colMaps->begin(); iterCol!=colMaps->end(); ++iterCol){
             auto map = iterCol->first;
             auto * mapVector = iterCol->second;
             mapVector->clear();

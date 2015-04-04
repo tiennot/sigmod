@@ -13,7 +13,7 @@ TupleCBuffer * tupleContentPtr;
 Tuple currentTuple = 0;
 
 //Maps a relation's column and a value to the tuples that affected it
-transactionHistory_t * transactionHistoryPtr[NB_THREAD];
+transactionHistory_t * transactionHistoryPtr;
 
 //Stores the booleans for output & last echoed validation + mutex
 pair<vector<bool>, uint64_t> queryResults;
@@ -26,7 +26,7 @@ queriesToProcess_t * queriesToProcessPtr[NB_THREAD];
 tuplesToIndex_t * tuplesToIndexPtr[NB_THREAD];
 
 //Maps each unique column with figures
-uColIndicator_t * uColIndicatorPtr[NB_THREAD];
+uColIndicator_t * uColIndicatorPtr;
 
 //Stuff for synchronization
 atomic<uint32_t> processingFlushThreadsNb(NB_THREAD), processingForgetThreadsNb(0);
@@ -48,19 +48,17 @@ static void processDefineSchema(const DefineSchema& d)
     relations.resize(d.relationCount);
 
     //Allocates maps for history
-    for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
-        transactionHistoryPtr[thread]->resize(schema.size());
-        uColIndicatorPtr[thread]->resize(schema.size());
-    }
+    transactionHistoryPtr->resize(schema.size());
+    uColIndicatorPtr->resize(schema.size());
+
     for(uint32_t i=0; i!=schema.size(); ++i){
-        auto thread = assignedThread(i);
-        (*transactionHistoryPtr[thread])[i].resize(schema[i]);
-        (*uColIndicatorPtr[thread])[i].resize(schema[i]);
+        (*transactionHistoryPtr)[i].resize(schema[i]);
+        (*uColIndicatorPtr)[i].resize(schema[i]);
         for(uint32_t j=0; j!=schema[i]; ++j){
             //A map that keeps the tuples for each value
-            (*transactionHistoryPtr[thread])[i][j].first = new unordered_map<uint64_t, vector<Tuple>>;
+            (*transactionHistoryPtr)[i][j].first = new unordered_map<uint64_t, vector<Tuple>>;
             //A vector, used when only <, >, <=, >=
-            (*transactionHistoryPtr[thread])[i][j].second = new vector<uint64_t>;
+            (*transactionHistoryPtr)[i][j].second = new vector<uint64_t>;
         }
     }
 }
@@ -208,13 +206,13 @@ int main()
 {
     //cerr << "Pause... "; sleep(15); cerr << "Resumes..." << endl;
 
-    //Allocates maps
+    //Allocates stuff
     tupleContentPtr = new TupleCBuffer(33544432);
+    transactionHistoryPtr = new transactionHistory_t;
+    uColIndicatorPtr = new uColIndicator_t;
     for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
-        transactionHistoryPtr[thread] = new transactionHistory_t;
         queriesToProcessPtr[thread] = new queriesToProcess_t;
         tuplesToIndexPtr[thread] = new tuplesToIndex_t(33544432/NB_THREAD);
-        uColIndicatorPtr[thread] = new uColIndicator_t;
     }
 
     //Instanciates threads
@@ -261,18 +259,17 @@ int main()
                 mutexForget.unlock();
                 //Desallocates history
                 for(uint32_t i=0; i!=schema.size(); ++i){
-                    auto thread = assignedThread(i);
                     for(uint32_t j=0; j!=schema[i]; ++j){
-                        delete (*(transactionHistoryPtr[thread]))[i][j].first;
-                        delete (*(transactionHistoryPtr[thread]))[i][j].second;
+                        delete (*transactionHistoryPtr)[i][j].first;
+                        delete (*transactionHistoryPtr)[i][j].second;
                     }
                 }
                 //Desallocates
+                delete transactionHistoryPtr;
+                delete uColIndicatorPtr;
                 for(uint32_t thread=0; thread!=NB_THREAD; ++thread){
-                    delete transactionHistoryPtr[thread];
                     delete queriesToProcessPtr[thread];
                     delete tuplesToIndexPtr[thread];
-                    delete uColIndicatorPtr[thread];
                 }
                 delete tupleContentPtr;
                 return 0;

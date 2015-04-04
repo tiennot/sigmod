@@ -17,9 +17,6 @@ public:
 
 private:
     uint32_t thread;
-    //Aliases
-    transactionHistory_t * transactionHistory;
-    TupleCBuffer * tupleContent;
     //Function to process the forget
     void processForget();
 };
