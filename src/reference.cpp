@@ -30,7 +30,7 @@ uColIndicator_t * uColIndicatorPtr;
 
 //Stuff for synchronization
 atomic<uint32_t> processingFlushThreadsNb(NB_THREAD), processingForgetThreadsNb(0);
-condition_variable_any conditionFlush, conditionForget;
+condition_variable_any conditionFlush, conditionForget, conditionEndIndexing;
 mutex mutexFlush, mutexForget;
 atomic<bool> referenceOver(false);
 atomic<uint64_t> forgetTupleBound(0);
@@ -127,7 +127,7 @@ static void processValidationQueries(const ValidationQueries& v)
         auto& q=*reinterpret_cast<const Query*>(reader);
 
         //Adds query to the list to process by the relevant thread
-        auto thread = assignedThread(q.relationId);
+        uint32_t thread = v.validationId%NB_THREAD;
         queriesToProcessPtr[thread]->push_back(make_pair(v, make_pair(q, vector<Query::Column>())));
         //Adds the columns
         vector<Query::Column> * vCol = &(queriesToProcessPtr[thread]->back().second.second);

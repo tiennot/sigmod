@@ -13,20 +13,29 @@ void FlushThread::launch(){
         //Indexes
         indexTuples();
 
-        //Processes
+        //Waits for the others threads to end indexing
+        mutexFlush.lock();
+        if(--processingFlushThreadsNb==0){
+            processingFlushThreadsNb = NB_THREAD;
+            conditionEndIndexing.notify_all();
+            mutexFlush.unlock();
+        }else{
+            conditionEndIndexing.wait(mutexFlush);
+            mutexFlush.unlock();
+        }
+
+        //Process queries
         processQueries();
 
         if(referenceOver) break;
 
+        //Synchro. main thread and threads
         mutexFlush.lock();
-        //When done processing decrements processingThreadNb
         if(--processingFlushThreadsNb==0){
             processingFlushThreadsNb = NB_THREAD;
-            //Signals main thread and fellows
             conditionFlush.notify_all();
             mutexFlush.unlock();
         }else{
-            //waits for the releaser thread
             conditionFlush.wait(mutexFlush);
             mutexFlush.unlock();
         }

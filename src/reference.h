@@ -193,7 +193,7 @@ extern queriesToProcess_t * queriesToProcessPtr[];
 extern tuplesToIndex_t * tuplesToIndexPtr[];
 extern uColIndicator_t * uColIndicatorPtr;
 extern atomic<uint32_t> processingFlushThreadsNb, processingForgetThreadsNb;
-extern condition_variable_any conditionFlush, conditionForget;
+extern condition_variable_any conditionFlush, conditionForget, conditionEndIndexing;
 extern mutex mutexFlush, mutexForget;
 extern atomic<bool> referenceOver;
 extern atomic<uint64_t> forgetTupleBound;
